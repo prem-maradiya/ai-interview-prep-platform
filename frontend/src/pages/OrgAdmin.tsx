@@ -11,7 +11,7 @@ type IntegrityItem = {
 type Member = { id: string; email: string; full_name: string; role: string; is_active: boolean };
 type Invite = { id: string; code: string; email: string | null; role: string; expires_at: string; used_at: string | null };
 type Usage = Record<string, { used: number; limit: number | null; window_days: number }>;
-type Row = { user_id: string; full_name: string; role: string; problems_solved: number; submissions: number; interviews_completed: number; avg_interview_score: number | null };
+type Row = { user_id: string; full_name: string; role: string; xp: number; level: number; problems_solved: number; submissions: number; interviews_completed: number; avg_interview_score: number | null };
 
 export default function OrgAdmin() {
   const { user } = useAuth();
@@ -76,11 +76,11 @@ export default function OrgAdmin() {
           <button onClick={() => apiDownload("/analytics/org/export.csv", "cohort-report.csv")}>Export CSV</button>
         </div>
         <table className="table">
-          <thead><tr><th>Member</th><th>Role</th><th>Solved</th><th>Submissions</th><th>Interviews</th><th>Avg score</th></tr></thead>
+          <thead><tr><th>Member</th><th>Role</th><th>Level</th><th>XP</th><th>Solved</th><th>Submissions</th><th>Interviews</th><th>Avg score</th></tr></thead>
           <tbody>
             {board.map((r) => (
               <tr key={r.user_id}>
-                <td><Link to={`/org/members/${r.user_id}`}>{r.full_name}</Link></td><td>{r.role}</td><td>{r.problems_solved}</td><td>{r.submissions}</td>
+                <td><Link to={`/org/members/${r.user_id}`}>{r.full_name}</Link></td><td>{r.role}</td><td>{r.level}</td><td>{r.xp}</td><td>{r.problems_solved}</td><td>{r.submissions}</td>
                 <td>{r.interviews_completed}</td><td>{r.avg_interview_score ?? "—"}</td>
               </tr>
             ))}

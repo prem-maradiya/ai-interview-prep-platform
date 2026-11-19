@@ -1,0 +1,8 @@
+# Keep LF line endings in every checkout (including Windows with core.autocrlf=true).
+# Files are copied into Linux containers, where CRLF breaks shell scripts and some parsers.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

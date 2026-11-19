@@ -1,13 +1,14 @@
 from datetime import timezone
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 
 from app.api.deps import DB, ROLE_RANK, CurrentUser, MentorUser, get_scoped
-from app.db.models import Assignment, AssignmentMember, Problem, Role, User
+from app.db.models import Assignment, AssignmentMember, Notification, Problem, Role, User
 from app.schemas import AssignmentIn
 from app.services.assignments import assignees, is_assigned, progress
 from app.services.csv_export import csv_response
+from app.services.notifications import notify
 
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
@@ -57,6 +58,10 @@ async def create_assignment(body: AssignmentIn, user: MentorUser, db: DB):
         members=[AssignmentMember(user_id=u) for u in member_ids],
     )
     db.add(a)
+    await db.flush()
+    targets = await assignees(db, a)
+    await notify(db, [u.id for u in targets], user.tenant_id, kind="assignment", title=f"New assignment: {a.title}",
+                 body=f"From {user.full_name}, due {due.strftime('%b %d')}.", link=f"/assignments/{a.id}")
     await db.commit()
     await db.refresh(a)
     return _base(a, await _problem_titles(db, a.problem_ids))
@@ -103,7 +108,11 @@ async def get_assignment(assignment_id: str, user: CurrentUser, db: DB):
 
 @router.delete("/{assignment_id}", status_code=204)
 async def delete_assignment(assignment_id: str, user: MentorUser, db: DB):
-    await db.delete(await get_scoped(db, Assignment, assignment_id, user.tenant_id))
+    a = await get_scoped(db, Assignment, assignment_id, user.tenant_id)
+    # Remove its notifications too, so nobody is left with links to a deleted assignment.
+    await db.execute(delete(Notification).where(Notification.tenant_id == user.tenant_id,
+                                                Notification.link == f"/assignments/{a.id}"))
+    await db.delete(a)
     await db.commit()
 
 

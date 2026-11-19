@@ -14,6 +14,7 @@ from app.schemas import (
     InterviewIn, InterviewOut, InterviewRunIn, InterviewSummary, MessageIn, MessageOut, RunOut,
 )
 from app.services import quota
+from app.services.achievements import check_badges
 from app.services.delivery import delivery_metrics
 from app.services.llm import InterviewContext, LLMError, LLMProvider, Turn, get_llm
 from app.services.sandbox import Sandbox, SandboxError, get_sandbox, grade
@@ -190,6 +191,8 @@ async def end_interview(interview_id: str, user: CurrentUser, db: DB, llm: LLMDe
     iv.overall_score = card.overall_score
     iv.status = "completed"
     iv.completed_at = datetime.now(timezone.utc)
+    await db.flush()
+    await check_badges(db, user)
     await db.commit()
     await db.refresh(iv)
     return iv

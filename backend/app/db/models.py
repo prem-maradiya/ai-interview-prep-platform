@@ -81,6 +81,7 @@ class Problem(Base):
     description: Mapped[str] = mapped_column(Text)
     difficulty: Mapped[str] = mapped_column(String(10), default="easy")
     tags: Mapped[list] = mapped_column(JSON, default=list)
+    companies: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")  # where it's been reported
     starter_code: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -245,6 +246,48 @@ class Comment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     author: Mapped[User] = relationship(lazy="joined")
+
+
+class Notification(Base):
+    """In-app notification. `dedupe_key` makes generated reminders idempotent (one per user per key)."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("user_id", "dedupe_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(30))  # assignment | due_soon | comment | badge
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text, default="")
+    link: Mapped[str] = mapped_column(String(300), default="")  # in-app path, e.g. /assignments/<id>
+    dedupe_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class UserBadge(Base):
+    __tablename__ = "user_badges"
+    __table_args__ = (UniqueConstraint("user_id", "badge"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    badge: Mapped[str] = mapped_column(String(40))
+    earned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ProblemList(Base):
+    """A curated set of problems, e.g. 'Arrays & hashing essentials'. tenant_id NULL = global list."""
+
+    __tablename__ = "problem_lists"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=True)
+    slug: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    problem_titles: Mapped[list] = mapped_column(JSON, default=list)  # for global lists (ids differ per DB)
+    problem_ids: Mapped[list] = mapped_column(JSON, default=list)  # for org lists
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class RefreshToken(Base):

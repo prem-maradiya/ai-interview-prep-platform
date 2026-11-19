@@ -25,13 +25,17 @@ class Settings(BaseSettings):
 
     # Sandbox: "docker" runs containers in this process; "queue" sends jobs to the arq worker via Redis
     sandbox_backend: str = "docker"
-    sandbox_memory: str = "256m"
-    sandbox_cpus: float = 0.5
-    sandbox_pids: int = 64
-    sandbox_test_timeout_s: float = 2.0
-    sandbox_total_timeout_s: float = 20.0
+    # Languages offered (each needs a ~60-650 MB image, built once on first use / worker start).
+    # Trim this to save disk, e.g. SANDBOX_LANGUAGES='["python","javascript"]'.
+    sandbox_languages: list[str] = ["python", "javascript", "java", "cpp", "go"]
+    sandbox_cpus: float = 1.0
+    sandbox_cpu_limit_s: float = 2.0  # per test, CPU time (Java gets x2 for JVM startup)
+    sandbox_wall_limit_s: float = 10.0  # per test, catches programs that sleep or block
+    sandbox_compile_cpu_s: float = 15.0
+    sandbox_compile_wall_s: float = 45.0
     sandbox_runtime: str | None = None  # e.g. "runsc" for gVisor
     sandbox_max_concurrency: int = 4
+    sandbox_prebuild_images: bool = True  # worker builds missing images at startup
 
     seed_demo_data: bool = True
 

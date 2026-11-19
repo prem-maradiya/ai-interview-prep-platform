@@ -27,8 +27,8 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 | **Multi-tenancy** | Shared-schema isolation: every tenant row has `tenant_id`, taken from the verified JWT and never from request input. Cross-tenant lookups return 404. Global problem bank shared by all tenants plus org-private problems. |
 | **Auth & RBAC** | Org self-signup, login by org slug, single-use invite codes (optionally email-locked). Roles: `owner > admin > mentor > candidate`. 15-minute access JWTs plus **rotating refresh tokens** tracked server-side: re-using an old refresh token revokes the whole session (theft detection). Logout and deactivating a member revoke their tokens. |
 | **Abuse protection** | Rate limits on login (per IP + account), signup, invite acceptance and refresh, Redis-backed so they hold across API replicas. nginx overwrites `X-Forwarded-For`, so clients can't spoof their IP. Constant-time login for unknown accounts. Production mode refuses to start with a weak JWT secret or without the job queue. |
-| **Code judge** | Python and JavaScript, stdin/stdout problems, sample + hidden tests, verdicts (accepted / wrong answer / runtime error / TLE), custom-input runs, per-language drafts saved in the browser. Hidden test inputs and outputs are never returned. |
-| **Docker sandbox** | Runs on a separate **worker** process fed by a Redis job queue (arq). Only the worker has the Docker socket; the API never does. Fresh container per run: `--network none`, read-only rootfs, 16 MB tmpfs, 256 MB memory, 0.5 CPU, 64 PIDs, `cap-drop ALL`, `no-new-privileges`, uid `nobody`, per-test and wall-clock timeouts, optional gVisor (`SANDBOX_RUNTIME=runsc`). Expected outputs never enter the container. |
+| **Code judge** | **Python, JavaScript, Java, C++ and Go**. stdin/stdout problems with sample + hidden tests; verdicts: accepted, wrong answer, compile error (with compiler output), runtime error, time limit and memory limit exceeded. Custom-input runs, per-language drafts and starter templates. Hidden test inputs and outputs are never returned. 13 seeded problems (easy → hard) with company tags. |
+| **Docker sandbox** | Runs on a separate **worker** process fed by a Redis job queue (arq). Only the worker has the Docker socket; the API never does. Fresh container per run from a small per-language Alpine image: `--network none`, read-only rootfs, tmpfs, per-language memory and PID limits, `cap-drop ALL`, `no-new-privileges`, uid `nobody`, optional gVisor (`SANDBOX_RUNTIME=runsc`). **Time limits are CPU time, enforced by the kernel (`RLIMIT_CPU`)**, so verdicts are the same on a busy laptop and a fast server; a separate wall-clock limit catches programs that sleep or block. Expected outputs never enter the container. |
 | **AI mock interviews** | Behavioral / technical (DSA) / system design, tuned by role, level and focus. The interviewer asks one question per turn, follows up, and its replies **stream word by word** over Server-Sent Events. Ending the interview produces a structured scorecard: 5 rubric dimensions (1–5), overall 0–100, hire signal, strengths, improvements and topics to practice. |
 | **Resume & job fit** | Upload a resume or job description (PDF/TXT/MD, text extracted server-side, file discarded) or paste it. Private to the owner, even within the org. A **fit report** gives a match score, matched/missing skills, truthful resume edits and likely questions. |
 | **Tailored interviews** | Start any interview from a resume and/or job description: questions target your actual projects and the role's requirements, and the scorecard is calibrated to the job. Documents are snapshotted at start. |
@@ -40,7 +40,10 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 | **Integrity signals** | The editor reports paste volume, tab switches and time spent with each submission. The server flags paste-heavy code, frequent tab switching, very fast solves of medium/hard problems, and code that matches another member's accepted solution **after renaming variables and removing comments**. Signals are shown only to mentors, labelled as hints, not proof. |
 | **CSV exports** | Cohort report and per-assignment progress as CSV. Cells that spreadsheets would execute as formulas (`=`, `+`, `-`, `@`) are neutralised (CSV-injection safe). |
 | **AI coaching** | AI code review on any submission (correctness, complexity, style), cached per submission. 3-level progressive hints that never give the full solution. |
-| **Analytics** | Candidate dashboard: solved by difficulty, acceptance rate, interview score trend, weakest rubric dimensions. Mentor view: cohort leaderboard. |
+| **Analytics** | Candidate dashboard: solved by difficulty, acceptance rate, interview score trend, weakest rubric dimensions. Mentor view: cohort leaderboard with XP and levels. |
+| **Notifications** | In-app bell for new assignments, mentor feedback and replies, badges, and "due within 24 hours" reminders. Reminders are generated when you check notifications, so there's no scheduler to run. Deleting an assignment removes its notifications. |
+| **XP, levels & badges** | XP from first solves (easy 10 / medium 25 / hard 50), completed interviews and on-time spaced-repetition reviews, always recomputed from real activity so it can't be farmed by re-solving. 10 badges (first solve, polyglot, 7-day streak, all-rounder, 80+ interview score…) with notifications. |
+| **Problem lists** | Curated lists (interview warm-up, arrays & hashing, frequently asked at big tech) with per-user progress; mentors can make lists for their org. Filter problems by company or search by title/topic. |
 | **Quotas** | Per-tenant, per-plan limits on AI requests (monthly) and code runs (daily), metered in `usage_events`. 429 when exceeded. |
 
 ### LLM integration
@@ -66,7 +69,7 @@ Services: `db` (Postgres), `redis`, `backend` (runs `alembic upgrade head`, then
 ```bash
 cd backend
 python -m venv .venv && .venv/Scripts/activate   # Windows (Linux/macOS: source .venv/bin/activate)
-pip install -r requirements.txt
+pip install -r requirements-dev.txt              # runtime + test tools
 set DATABASE_URL=sqlite+aiosqlite:///./dev.db    # or point at Postgres
 alembic upgrade head                             # create / update the schema
 uvicorn app.main:app --reload                    # SANDBOX_BACKEND=docker (default) runs sandboxes in-process
@@ -74,13 +77,13 @@ uvicorn app.main:app --reload                    # SANDBOX_BACKEND=docker (defau
 ```bash
 cd frontend && npm install && npm run dev        # http://localhost:5173, proxies /api -> :8000
 ```
-Sandbox images are pulled on first run (`python:3.12-alpine`, `node:22-alpine`); pre-pull them to avoid a slow first submission.
+Sandbox images are built once on first use (the worker builds them at startup). To pre-build: `python -m app.services.sandbox` (optionally followed by language names).
 
 ### Tests
 ```bash
 cd backend && .venv/Scripts/python -m pytest -q
 ```
-Covers auth, invites and RBAC, **cross-tenant isolation**, hidden-test non-leakage, verdicts, interviews and scorecards,
+Covers auth, invites and RBAC, all five judge languages (compile errors, CPU-time and memory limits, fork bombs), **cross-tenant isolation**, hidden-test non-leakage, verdicts, interviews and scorecards,
 analytics, quotas, refresh rotation and reuse detection, rate limits, SSE streaming, the queue worker, production config checks,
 migrations-vs-models drift, and real-Docker sandbox checks (network blocked, read-only FS, non-root, timeouts). The Docker tests skip if no daemon is running.
 
@@ -118,10 +121,18 @@ backend/app/
   db/models.py         ORM models
 ```
 
+## Running on any machine
+
+- **Requirements:** Docker (Docker Desktop on Windows/macOS) with about 3 GB of free disk for all five language images, and 2 GB of RAM for Docker. Each service has a memory cap in `docker-compose.yml`, so the stack itself stays well under that.
+- **Choosing languages:** each language's sandbox image is built once (about 75 MB for Python and 300-600 MB each for JavaScript, C++, Go and Java). To save disk, enable only what you need in `.env`, e.g. `SANDBOX_LANGUAGES=["python","javascript"]`. Old image versions are removed automatically when the runner changes.
+- **First start:** the worker builds missing sandbox images (a few minutes, once). Follow it with `docker compose logs -f worker`.
+- **Windows:** keep the project outside OneDrive (or exclude `node_modules` and `.venv` from sync). Syncing tens of thousands of small files slows builds and Docker file sharing considerably. The repo enforces LF line endings (`.gitattributes`), so files copied into Linux containers behave the same as on Linux and macOS.
+- **Freeing space:** `docker builder prune` removes build cache. `docker compose down` stops the stack and keeps your data; add `-v` to delete the database as well.
+
 ## Roadmap (next features)
-- **Notifications:** email or in-app alerts for new assignments, approaching deadlines and mentor feedback.
-- **Sandbox:** CPU-time (not wall-clock) limits so a busy host can't cause false TLEs; a warm container pool to cut latency.
+- **Email notifications** (in-app notifications are done) and a weekly progress digest for mentors.
+- **Billing and SSO:** Stripe plans wired to quotas; Google / Microsoft sign-in for organizations.
+- **Sandbox:** a warm container pool to cut per-run latency; function-signature problems; complexity checks via large hidden tests.
 - **Postgres row-level security** as defense in depth.
-- **More languages** (Java, C++, Go), function-signature problems, and complexity checks via large hidden tests.
 - **Peer mock interviews** with a shared editor (WebSockets).
-- **Billing** (Stripe) wired to plans and quotas; SSO (SAML/OIDC) for enterprise tenants; audit log.
+- **Audit log** of admin actions; SAML for enterprise tenants.

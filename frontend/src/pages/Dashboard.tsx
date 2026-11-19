@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Plan, type PlanItem } from "../lib/api";
+import { LevelBar, type Achievements } from "./Achievements";
 
 type Progress = {
   solved_by_difficulty: Record<string, number>;
@@ -16,9 +17,11 @@ type Progress = {
 export default function Dashboard() {
   const [p, setP] = useState<Progress | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
+  const [ach, setAch] = useState<Achievements | null>(null);
   useEffect(() => {
     api<Progress>("/analytics/me").then(setP);
     api<Plan>("/practice/plan").then(setPlan);
+    api<Achievements>("/achievements").then(setAch).catch(() => {});
   }, []);
   if (!p) return <div className="muted">Loading…</div>;
 
@@ -26,6 +29,12 @@ export default function Dashboard() {
   return (
     <div className="stack">
       {plan && <TodayPlan plan={plan} />}
+      {ach && (
+        <Link to="/achievements" className="card level-card">
+          <LevelBar a={ach} />
+          <div className="small muted">{ach.badges.filter((b) => b.earned).map((b) => b.icon).join(" ") || "No badges yet - solve a problem to earn your first."}</div>
+        </Link>
+      )}
       <h2>Your progress</h2>
       <div className="stats">
         <Stat label="Problems solved" value={`${p.solved_total} / ${p.total_problems}`} />

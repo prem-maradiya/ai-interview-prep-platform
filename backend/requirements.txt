@@ -1,3 +1,5 @@
+# Runtime dependencies (what the API and worker images install).
+# Test/dev tools live in requirements-dev.txt.
 fastapi>=0.115
 uvicorn[standard]>=0.30
 sqlalchemy[asyncio]>=2.0.30
@@ -15,6 +17,3 @@ redis>=5.0
 python-multipart>=0.0.9
 pypdf>=4.0
 anthropic>=0.70
-httpx>=0.27
-pytest>=8.2
-pytest-asyncio>=0.23

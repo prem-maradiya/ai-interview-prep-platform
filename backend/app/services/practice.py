@@ -64,15 +64,22 @@ def streak_from_dates(days: set[date], today: date) -> int:
     return n
 
 
-async def build_plan(db: AsyncSession, user: User) -> dict:
-    now = _now()
-    since = now - timedelta(days=90)
-
-    activity = (await db.scalars(select(Submission.created_at).where(
-        Submission.user_id == user.id, Submission.created_at >= since))).all()
+async def activity_days(db: AsyncSession, user: User, days_back: int = 90) -> set[date]:
+    since = _now() - timedelta(days=days_back)
+    activity = list((await db.scalars(select(Submission.created_at).where(
+        Submission.user_id == user.id, Submission.created_at >= since))).all())
     activity += (await db.scalars(select(Interview.created_at).where(
         Interview.user_id == user.id, Interview.created_at >= since))).all()
-    days = {_aware(d).date() for d in activity}
+    return {_aware(d).date() for d in activity}
+
+
+async def build_streak(db: AsyncSession, user: User) -> int:
+    return streak_from_dates(await activity_days(db, user), _now().date())
+
+
+async def build_plan(db: AsyncSession, user: User) -> dict:
+    now = _now()
+    days = await activity_days(db, user)
 
     problems = {p.id: p for p in (await db.scalars(select(Problem).where(
         or_(Problem.tenant_id == user.tenant_id, Problem.tenant_id.is_(None))))).all()}

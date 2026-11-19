@@ -91,6 +91,38 @@ REFERENCE_SOLUTIONS = {
         "import sys\ns=sys.stdin.read().strip('\\n');b=0;st=0;last={}\n"
         "for i,ch in enumerate(s):\n    if last.get(ch,-1)>=st: st=last[ch]+1\n    last[ch]=i;b=max(b,i-st+1)\nprint(b)"
     ),
+    "Binary Search": (
+        "import sys, bisect\nl=sys.stdin.read().split('\\n');a=list(map(int,l[0].split()));t=int(l[1])\n"
+        "i=bisect.bisect_left(a,t)\nprint(i if i<len(a) and a[i]==t else -1)"
+    ),
+    "Valid Anagram": "import sys\ns,t=sys.stdin.read().split('\\n')[:2]\nprint('true' if sorted(s.strip())==sorted(t.strip()) else 'false')",
+    "Climbing Stairs": "n=int(input())\na,b=1,1\nfor _ in range(n): a,b=b,a+b\nprint(a)",
+    "Maximum Subarray": (
+        "a=list(map(int,input().split()))\nbest=cur=a[0]\n"
+        "for x in a[1:]:\n    cur=max(x,cur+x); best=max(best,cur)\nprint(best)"
+    ),
+    "Merge Intervals": (
+        "import sys\nl=sys.stdin.read().split('\\n');n=int(l[0])\n"
+        "iv=sorted(tuple(map(int,l[i+1].split())) for i in range(n));out=[]\n"
+        "for s,e in iv:\n    if out and s<=out[-1][1]: out[-1][1]=max(out[-1][1],e)\n    else: out.append([s,e])\n"
+        "print('\\n'.join(f'{s} {e}' for s,e in out))"
+    ),
+    "Number of Islands": (
+        "import sys\nl=sys.stdin.read().split('\\n');r,c=map(int,l[0].split());g=[list(l[i+1].strip()) for i in range(r)]\n"
+        "n=0\nfor i in range(r):\n    for j in range(c):\n        if g[i][j]=='1':\n            n+=1;st=[(i,j)];g[i][j]='0'\n"
+        "            while st:\n                y,x=st.pop()\n                for dy,dx in ((1,0),(-1,0),(0,1),(0,-1)):\n"
+        "                    a,b=y+dy,x+dx\n                    if 0<=a<r and 0<=b<c and g[a][b]=='1': g[a][b]='0';st.append((a,b))\n"
+        "print(n)"
+    ),
+    "Trapping Rain Water": (
+        "h=list(map(int,input().split()))\nl,r=0,len(h)-1;lm=rm=w=0\n"
+        "while l<r:\n    if h[l]<h[r]:\n        lm=max(lm,h[l]);w+=lm-h[l];l+=1\n    else:\n        rm=max(rm,h[r]);w+=rm-h[r];r-=1\nprint(w)"
+    ),
+    "Edit Distance": (
+        "a=input().strip();b=input().strip()\nd=list(range(len(b)+1))\n"
+        "for i in range(1,len(a)+1):\n    p=d[:];d[0]=i\n    for j in range(1,len(b)+1):\n"
+        "        d[j]=p[j-1] if a[i-1]==b[j-1] else 1+min(p[j-1],p[j],d[j-1])\nprint(d[-1])"
+    ),
 }
 
 

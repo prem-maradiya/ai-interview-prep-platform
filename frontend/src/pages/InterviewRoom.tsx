@@ -6,11 +6,11 @@ import { api, apiStream, type Interview, type Message, type RunResult, type Scor
 import { listen, speak, stopSpeaking, voiceSupport, type Listener } from "../lib/voice";
 import { useAuth } from "../lib/auth";
 import CommentThread from "../components/CommentThread";
+import { LANGUAGES, TEMPLATES, monacoLang } from "../lib/languages";
 
-const STARTER: Record<string, string> = {
-  python: "# Sketch your solution here. The interviewer sees it when you send your next answer.\n\n",
-  javascript: "// Sketch your solution here. The interviewer sees it when you send your next answer.\n\n",
-};
+const STARTER: Record<string, string> = Object.fromEntries(
+  LANGUAGES.map((l) => [l.id, TEMPLATES[l.id]]),
+);
 
 export default function InterviewRoom() {
   const { id } = useParams();
@@ -231,13 +231,12 @@ export default function InterviewRoom() {
             <div className="row between">
               <select value={lang} onChange={(e) => { setLang(e.target.value); if (!code.trim() || code === STARTER[lang]) setCode(STARTER[e.target.value]); }}
                 disabled={!active}>
-                <option value="python">python</option>
-                <option value="javascript">javascript</option>
+                {LANGUAGES.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
               <button onClick={runCode} disabled={!active || !!busy}>{busy === "run" ? "Running…" : "Run"}</button>
             </div>
             <div className="editor">
-              <Editor height="100%" language={lang} theme="vs-dark" value={code} onChange={(v) => setCode(v ?? "")}
+              <Editor height="100%" language={monacoLang(lang)} theme="vs-dark" value={code} onChange={(v) => setCode(v ?? "")}
                 options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false, readOnly: !active }} />
             </div>
             <textarea rows={2} value={stdin} onChange={(e) => setStdin(e.target.value)} placeholder="stdin for Run (optional)" />
@@ -245,7 +244,7 @@ export default function InterviewRoom() {
               <div className="card small">
                 <b className={`verdict ${runResult.results[0].status === "ran" ? "accepted" : runResult.verdict}`}>
                   {runResult.results[0].status.replace(/_/g, " ")}
-                </b> · {runResult.runtime_ms} ms
+                </b> · {runResult.runtime_ms} ms CPU
                 <pre>{runResult.results[0].stdout || "(no output)"}</pre>
                 {runResult.results[0].stderr && <pre className="stderr">{runResult.results[0].stderr}</pre>}
               </div>

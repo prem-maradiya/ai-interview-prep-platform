@@ -20,6 +20,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U prep"]
       interval: 3s
       retries: 20
+    # Memory caps keep the whole stack around 1.5 GB, so it runs comfortably on an 8 GB laptop.
+    mem_limit: 512m
 
   redis:
     image: redis:7-alpine
@@ -27,6 +29,8 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       retries: 20
+    command: ["redis-server", "--maxmemory", "96mb", "--maxmemory-policy", "volatile-lru", "--save", ""]
+    mem_limit: 128m
 
   backend:
     build: ./backend
@@ -44,6 +48,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    mem_limit: 512m
 
   worker:
     # Runs untrusted code. The only service with the Docker socket: in production, put it on
@@ -60,6 +65,9 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # Sandbox containers have their own per-language limits; this caps the worker process itself.
+    # On first start it builds the sandbox images (one-time, a few minutes) - see SANDBOX_LANGUAGES.
+    mem_limit: 384m
 
   frontend:
     build: ./frontend
@@ -68,6 +76,7 @@ services:
     ports:
       - "${WEB_PORT:-3080}:80"
     restart: unless-stopped
+    mem_limit: 64m
 
 volumes:
   pgdata:

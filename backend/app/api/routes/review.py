@@ -7,6 +7,7 @@ from app.api.routes.analytics import org_overview
 from app.db.models import Comment, Interview, Problem, Role, Submission, User
 from app.schemas import CommentIn, CommentOut, InterviewSummary, StaffSubmissionOut
 from app.services.csv_export import csv_response
+from app.services.notifications import notify
 
 router = APIRouter(tags=["review"])
 
@@ -44,10 +45,22 @@ async def list_comments(target_type: str, target_id: str, user: CurrentUser, db:
 @router.post("/comments", response_model=CommentOut, status_code=201)
 async def add_comment(body: CommentIn, user: CurrentUser, db: DB):
     """Mentors leave feedback; the candidate who owns the item can reply."""
-    await _check_target(db, body.target_type, body.target_id, user)
+    target = await _check_target(db, body.target_type, body.target_id, user)
     c = Comment(tenant_id=user.tenant_id, author_id=user.id, target_type=body.target_type,
                 target_id=body.target_id, body=body.body.strip())
     db.add(c)
+    # Notify the item's owner; when the owner replies, notify the mentors already in the thread.
+    if target.user_id != user.id:
+        recipients = [target.user_id]
+    else:
+        recipients = list((await db.scalars(select(Comment.author_id).where(
+            Comment.target_type == body.target_type, Comment.target_id == body.target_id,
+            Comment.author_id != user.id).distinct())).all())
+    link = f"/interviews/{target.id}" if body.target_type == "interview" else f"/submissions/{target.id}"
+    preview = c.body if len(c.body) <= 140 else c.body[:137] + "..."
+    await notify(db, recipients, user.tenant_id, kind="comment",
+                 title=f"{user.full_name} commented on your {body.target_type}" if target.user_id != user.id
+                 else f"{user.full_name} replied to your feedback", body=preview, link=link)
     await db.commit()
     c = await db.scalar(select(Comment).where(Comment.id == c.id))  # reload with author
     return _out(c)

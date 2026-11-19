@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-Language = Literal["python", "javascript"]
+Language = Literal["python", "javascript", "java", "cpp", "go"]
 InterviewKind = Literal["behavioral", "technical", "system_design"]
 
 
@@ -107,6 +107,7 @@ class ProblemIn(BaseModel):
     description: str
     difficulty: Literal["easy", "medium", "hard"] = "easy"
     tags: list[str] = []
+    companies: list[str] = Field(default=[], max_length=20)
     starter_code: dict[str, str] = {}
     tests: list[TestCaseIn] = Field(min_length=1)
 
@@ -116,6 +117,7 @@ class ProblemSummary(ORM):
     title: str
     difficulty: str
     tags: list[str]
+    companies: list[str] = []
     is_global: bool = False
     solved: bool = False
 
@@ -126,6 +128,7 @@ class ProblemOut(ORM):
     description: str
     difficulty: str
     tags: list[str]
+    companies: list[str] = []
     starter_code: dict[str, str]
     is_global: bool = False
     sample_tests: list[TestCaseOut] = []
@@ -224,6 +227,12 @@ class Telemetry(BaseModel):
     paste_events: int = Field(default=0, ge=0, le=100_000)
     tab_switches: int = Field(default=0, ge=0, le=100_000)
     time_spent_s: float | None = Field(default=None, ge=0, le=10_000_000)
+
+
+class ProblemListIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    problem_ids: list[str] = Field(min_length=1, max_length=100)
 
 
 # ---------- documents ----------

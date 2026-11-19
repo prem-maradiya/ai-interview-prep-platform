@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import Markdown from "react-markdown";
+import { LANGUAGES, TEMPLATES, monacoLang, type LangId } from "../lib/languages";
 import { api, type Problem, type RunResult, type Submission } from "../lib/api";
 
-const LANGS = ["python", "javascript"] as const;
-type Lang = (typeof LANGS)[number];
+type Lang = LangId;
 
 export default function ProblemSolve() {
   const { id } = useParams();
@@ -50,14 +50,14 @@ export default function ProblemSolve() {
   useEffect(() => {
     api<Problem>(`/problems/${id}`).then((p) => {
       setProblem(p);
-      setCode(localStorage.getItem(draftKey("python")) ?? p.starter_code.python ?? "");
+      setCode(localStorage.getItem(draftKey("python")) ?? p.starter_code.python ?? TEMPLATES.python);
     });
     api<Submission[]>(`/submissions?problem_id=${id}`).then(setHistory);
   }, [id]);
 
   function switchLang(l: Lang) {
     setLang(l);
-    setCode(localStorage.getItem(draftKey(l)) ?? problem?.starter_code[l] ?? "");
+    setCode(localStorage.getItem(draftKey(l)) ?? problem?.starter_code[l] ?? TEMPLATES[l]);
   }
 
   function onCode(v?: string) {
@@ -157,7 +157,7 @@ export default function ProblemSolve() {
       <section className="stack">
         <div className="row between">
           <select value={lang} onChange={(e) => switchLang(e.target.value as Lang)}>
-            {LANGS.map((l) => <option key={l}>{l}</option>)}
+            {LANGUAGES.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
           </select>
           <div className="row">
             <button onClick={() => act("run")} disabled={!!busy}>{busy === "run" ? "Running…" : "Run"}</button>
@@ -165,7 +165,7 @@ export default function ProblemSolve() {
           </div>
         </div>
         <div className="editor">
-          <Editor height="100%" language={lang} theme="vs-dark" value={code} onChange={onCode} onMount={onEditorMount}
+          <Editor height="100%" language={monacoLang(lang)} theme="vs-dark" value={code} onChange={onCode} onMount={onEditorMount}
             options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false }} />
         </div>
         <label className="small"><input type="checkbox" checked={useCustom} onChange={(e) => setUseCustom(e.target.checked)} /> Run with custom input</label>
@@ -191,12 +191,12 @@ function Results({ r }: { r: RunResult }) {
     <div className="card">
       <div className="row between">
         <b className={`verdict ${r.verdict}`}>{r.verdict.replace(/_/g, " ")}</b>
-        <span className="muted small">{r.passed}/{r.total} passed · max {r.runtime_ms} ms</span>
+        <span className="muted small">{r.passed}/{r.total} passed · max {r.runtime_ms} ms CPU</span>
       </div>
       {r.results.map((t) => (
         <details key={t.index} className="test" open={!t.passed && !t.hidden}>
           <summary>
-            {t.passed ? "✅" : "❌"} Test {t.index + 1} {t.hidden && <span className="muted">(hidden)</span>} — {t.status.replace(/_/g, " ")} · {t.time_ms} ms
+            {t.passed ? "✅" : "❌"} Test {t.index + 1} {t.hidden && <span className="muted">(hidden)</span>} — {t.status.replace(/_/g, " ")} · {t.time_ms} ms CPU
           </summary>
           {!t.hidden && (
             <div className="grid2 small">

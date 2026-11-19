@@ -192,9 +192,10 @@ async def test_study_plan(client, reg):
     plan = (await client.get("/api/practice/plan", headers=h)).json()
     assert plan["streak_days"] == 1 and plan["practiced_today"] and plan["learned_count"] == 1
     assert plan["due_count"] == 0 and plan["next_review_at"]  # failed problem comes back tomorrow
-    # The hash-map weakness ranks the other hash-map problem first among new problems.
-    assert plan["new_problems"][0]["title"] == "Longest Substring Without Repeating Characters"
-    assert "hash-map" in plan["new_problems"][0]["reason"]
+    # The failed problem's tags (arrays, hash-map) rank matching problems first, explained in the reason.
+    first = plan["new_problems"][0]
+    assert "struggled" in first["reason"] and ("arrays" in first["reason"] or "hash-map" in first["reason"])
+    assert first["title"] not in ("Two Sum", "Reverse a String")
 
     # Problems solved before review tracking existed (no ReviewItem) are not offered as "new".
     async with SessionLocal() as s:

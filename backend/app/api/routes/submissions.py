@@ -10,6 +10,7 @@ from app.schemas import HintIn, RunIn, RunOut, StaffSubmissionOut, SubmissionOut
 from app.services.integrity import similarity_flag, telemetry_flags
 from app.services import quota
 from app.services.llm import LLMError, LLMProvider, get_llm
+from app.services.achievements import check_badges
 from app.services.practice import record_attempt
 from app.services.sandbox import Sandbox, SandboxError, get_sandbox, grade
 
@@ -67,6 +68,9 @@ async def submit_code(problem_id: str, body: RunIn, user: CurrentUser, db: DB, s
     sub.integrity_flags = sorted(flags, key=lambda f: severity[f["severity"]]) or None
     db.add(sub)
     await record_attempt(db, user, problem.id, sub.verdict)  # spaced-repetition schedule
+    if sub.verdict == "accepted":
+        await db.flush()
+        await check_badges(db, user)
     await db.commit()
     return sub  # SubmissionOut: integrity signals are only shown to mentors
 

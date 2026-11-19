@@ -3,6 +3,7 @@ from sqlalchemy import distinct, func, or_, select
 
 from app.api.deps import DB, CurrentUser, MentorUser
 from app.db.models import Interview, Problem, Submission, User
+from app.services.achievements import level_for, xp_for_user
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -63,12 +64,14 @@ async def org_overview(user: MentorUser, db: DB):
     rows = []
     for m in members:
         n, avg = iv_stats.get(m.id, (0, None))
+        xp = await xp_for_user(db, m)
         rows.append({
             "user_id": m.id, "full_name": m.full_name, "email": m.email, "role": m.role,
+            "xp": xp, "level": level_for(xp)["level"],
             "problems_solved": solved.get(m.id, 0), "submissions": subs.get(m.id, 0),
             "interviews_completed": n, "avg_interview_score": round(avg, 1) if avg is not None else None,
         })
-    rows.sort(key=lambda r: (r["problems_solved"], r["avg_interview_score"] or 0), reverse=True)
+    rows.sort(key=lambda r: (r["xp"], r["problems_solved"]), reverse=True)
     return {
         "member_count": len(members),
         "total_submissions": sum(subs.values()),

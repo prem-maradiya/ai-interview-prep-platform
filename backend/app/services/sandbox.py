@@ -1,67 +1,54 @@
-"""Isolated code execution in throwaway Docker containers.
+"""Isolated code execution in throwaway Docker containers, for Python, JavaScript, Java, C++ and Go.
 
-Each run gets a fresh container with:
-  - no network, read-only root filesystem, a small tmpfs for /tmp
+Each run gets a fresh container from a small per-language image (built from app/sandbox_images):
+  - no network, read-only root filesystem, a tmpfs for /tmp
   - memory / CPU / PID limits, all capabilities dropped, no-new-privileges
   - non-root user (nobody), optional gVisor runtime (SANDBOX_RUNTIME=runsc)
-  - a per-test timeout inside the container plus a hard wall-clock timeout outside it
+  - per-test CPU-time limits enforced by the kernel (RLIMIT_CPU), a generous per-test wall-clock
+    limit for blocked programs, and a hard limit on the whole container
 
-Code and test *inputs* are passed in through an environment variable (base64 JSON), so no
-bind mounts are needed and it works when the API itself runs inside Docker. Expected outputs
-never enter the container: grading happens here, on the host side.
+The same harness (app/sandbox_images/harness.py) runs in every image: it compiles once, then runs
+each test. Times are reported as CPU time, so verdicts don't depend on how busy the host is.
+
+Code and test *inputs* go in through an environment variable (base64 JSON), so no bind mounts are
+needed and it works when the worker runs inside Docker. Expected outputs never enter the container:
+grading happens here, on the host side.
 """
 import asyncio
 import base64
+import hashlib
 import json
+import logging
+import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 import anyio
 
 from app.core.config import get_settings
 
+log = logging.getLogger("prepforge.sandbox")
+
 OUTPUT_LIMIT = 64 * 1024
 RESULT_MARKER = "@@RESULT@@"
+IMAGES_DIR = Path(__file__).resolve().parent.parent / "sandbox_images"
 
-PY_HARNESS = r"""
-import base64, json, os, subprocess, sys, time
-p = json.loads(base64.b64decode(os.environ.pop("PAYLOAD")))
-with open("/tmp/sol.py", "w") as f:
-    f.write(p["code"])
-out, LIM = [], p["limit"]
-for t in p["tests"]:
-    s = time.perf_counter()
-    try:
-        r = subprocess.run([sys.executable, "/tmp/sol.py"], input=t.encode(), capture_output=True,
-                           timeout=p["timeout"], env={"PYTHONDONTWRITEBYTECODE": "1"})
-        st, o, e = ("ok" if r.returncode == 0 else "runtime_error"), r.stdout, r.stderr
-    except subprocess.TimeoutExpired as x:
-        st, o, e = "timeout", (x.stdout or b""), b""
-    out.append({"status": st, "stdout": o[:LIM].decode(errors="replace"),
-                "stderr": e[-LIM:].decode(errors="replace"), "time_ms": int((time.perf_counter() - s) * 1000)})
-print("@@RESULT@@" + json.dumps(out))
-"""
 
-JS_HARNESS = r"""
-const fs = require('fs'), cp = require('child_process');
-const p = JSON.parse(Buffer.from(process.env.PAYLOAD, 'base64').toString());
-delete process.env.PAYLOAD;
-fs.writeFileSync('/tmp/sol.js', p.code);
-const out = [];
-for (const t of p.tests) {
-  const s = Date.now();
-  const r = cp.spawnSync(process.execPath, ['/tmp/sol.js'], {input: t, timeout: p.timeout * 1000, maxBuffer: 4 * 1024 * 1024, env: {}});
-  let st = 'ok';
-  if ((r.error && r.error.code === 'ETIMEDOUT') || r.signal === 'SIGTERM') st = 'timeout';
-  else if (r.error || r.status !== 0) st = 'runtime_error';
-  out.push({status: st, stdout: (r.stdout || '').toString().slice(0, p.limit),
-            stderr: (r.stderr || '').toString().slice(-p.limit), time_ms: Date.now() - s});
-}
-console.log('@@RESULT@@' + JSON.stringify(out));
-"""
+@dataclass(frozen=True)
+class LanguageSpec:
+    memory: str
+    pids: int
+    tmpfs_mb: int
+    time_factor: float = 1.0  # CPU-limit multiplier (JVM startup + JIT cost more CPU)
+    compiled: bool = False
 
-LANGUAGES = {
-    "python": {"image": "python:3.12-alpine", "cmd": ["python3", "-c", PY_HARNESS]},
-    "javascript": {"image": "node:22-alpine", "cmd": ["node", "-e", JS_HARNESS]},
+
+LANGUAGES: dict[str, LanguageSpec] = {
+    "python": LanguageSpec(memory="256m", pids=64, tmpfs_mb=16),
+    "javascript": LanguageSpec(memory="256m", pids=64, tmpfs_mb=16),
+    "java": LanguageSpec(memory="512m", pids=256, tmpfs_mb=64, time_factor=2.0, compiled=True),
+    "cpp": LanguageSpec(memory="256m", pids=64, tmpfs_mb=64, compiled=True),
+    "go": LanguageSpec(memory="512m", pids=128, tmpfs_mb=192, compiled=True),
 }
 
 
@@ -71,10 +58,22 @@ class SandboxError(RuntimeError):
 
 @dataclass
 class RawResult:
-    status: str  # ok | runtime_error | timeout
+    status: str  # ok | runtime_error | timeout | memory | compile_error
     stdout: str
     stderr: str
-    time_ms: int
+    time_ms: int  # CPU time
+
+
+def enabled_languages() -> list[str]:
+    return [lang for lang in get_settings().sandbox_languages if lang in LANGUAGES]
+
+
+def image_tag(language: str) -> str:
+    """Content-addressed tag: changing the Dockerfile or harness produces a new image automatically."""
+    digest = hashlib.sha256()
+    for name in (f"{language}.Dockerfile", "harness.py"):
+        digest.update((IMAGES_DIR / name).read_bytes().replace(b"\r\n", b"\n"))
+    return f"prepforge-sandbox-{language}:{digest.hexdigest()[:12]}"
 
 
 class Sandbox:
@@ -87,6 +86,8 @@ class DockerSandbox(Sandbox):
         self.settings = get_settings()
         self._sem = asyncio.Semaphore(self.settings.sandbox_max_concurrency)
         self._client = None
+        self._build_lock = threading.Lock()
+        self._ready: set[str] = set()
 
     def _docker(self):
         if self._client is None:
@@ -101,33 +102,89 @@ class DockerSandbox(Sandbox):
         if runtime and runtime not in self._docker().info().get("Runtimes", {}):
             raise SandboxError(f"Docker runtime '{runtime}' is not installed on this host")
 
+    def ensure_image(self, language: str) -> str:
+        """Build the language's sandbox image if this exact version isn't present yet."""
+        import docker.errors
+
+        tag = image_tag(language)
+        if tag in self._ready:
+            return tag
+        with self._build_lock:
+            if tag in self._ready:
+                return tag
+            client = self._docker()
+            try:
+                client.images.get(tag)
+            except docker.errors.ImageNotFound:
+                log.info("Building sandbox image %s (one-time)", tag)
+                try:
+                    client.images.build(path=str(IMAGES_DIR), dockerfile=f"{language}.Dockerfile", tag=tag,
+                                        rm=True, forcerm=True, pull=True)
+                except docker.errors.DockerException as e:
+                    raise SandboxError(f"Could not build the {language} sandbox image: {e}") from e
+            except docker.errors.DockerException as e:
+                raise SandboxError(f"Sandbox unavailable: {e}") from e
+            self._remove_old_versions(language, keep=tag)
+            self._ready.add(tag)
+            return tag
+
+    def _remove_old_versions(self, language: str, keep: str) -> None:
+        """Delete outdated versions of this language's sandbox image, so upgrades don't pile up on disk."""
+        import docker.errors
+
+        repo = keep.split(":")[0]
+        for image in self._docker().images.list(name=repo):
+            for t in image.tags:
+                if t.startswith(repo + ":") and t != keep:
+                    try:
+                        self._docker().images.remove(t)
+                        log.info("Removed old sandbox image %s", t)
+                    except docker.errors.DockerException:
+                        pass  # still used by a running container; it'll go next time
+
+    def ensure_images(self, languages: list[str] | None = None) -> list[str]:
+        return [self.ensure_image(lang) for lang in (languages or enabled_languages())]
+
+    def _limits(self, spec: LanguageSpec, n_tests: int) -> dict:
+        s = self.settings
+        cpu = s.sandbox_cpu_limit_s * spec.time_factor
+        wall = max(s.sandbox_wall_limit_s, cpu * 3)
+        compile_wall = s.sandbox_compile_wall_s if spec.compiled else 0
+        return {
+            "cpu_limit": cpu, "wall_limit": wall,
+            "compile_cpu_limit": s.sandbox_compile_cpu_s, "compile_wall_limit": s.sandbox_compile_wall_s,
+            # Whole-container cap: compile + every test hitting its wall limit + startup slack.
+            "container_timeout": compile_wall + n_tests * wall + 15,
+        }
+
     def _run_blocking(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
         import docker.errors
         import requests.exceptions
 
         s = self.settings
         spec = LANGUAGES[language]
+        tag = self.ensure_image(language)
+        limits = self._limits(spec, len(inputs))
         payload = base64.b64encode(json.dumps({
-            "code": code, "tests": inputs, "timeout": s.sandbox_test_timeout_s, "limit": OUTPUT_LIMIT,
+            "lang": language, "code": code, "tests": inputs, "output_limit": OUTPUT_LIMIT,
+            **{k: v for k, v in limits.items() if k != "container_timeout"},
         }).encode()).decode()
         try:
-            client = self._docker()
-            container = client.containers.run(
-                spec["image"], spec["cmd"], environment={"PAYLOAD": payload}, detach=True,
-                network_mode="none", mem_limit=s.sandbox_memory, memswap_limit=s.sandbox_memory,
-                nano_cpus=int(s.sandbox_cpus * 1e9), pids_limit=s.sandbox_pids, read_only=True,
-                tmpfs={"/tmp": "rw,size=16m,mode=1777"}, user="65534:65534", cap_drop=["ALL"],
+            container = self._docker().containers.run(
+                tag, ["python3", "-S", "/opt/runner/harness.py"], environment={"PAYLOAD": payload}, detach=True,
+                network_mode="none", mem_limit=spec.memory, memswap_limit=spec.memory,
+                nano_cpus=int(s.sandbox_cpus * 1e9), pids_limit=spec.pids, read_only=True,
+                tmpfs={"/tmp": f"rw,exec,size={spec.tmpfs_mb}m,mode=1777"}, user="65534:65534", cap_drop=["ALL"],
                 security_opt=["no-new-privileges"], runtime=s.sandbox_runtime, working_dir="/tmp",
             )
         except docker.errors.DockerException as e:
             raise SandboxError(f"Sandbox unavailable: {e}") from e
         try:
             try:
-                container.wait(timeout=s.sandbox_total_timeout_s)
+                container.wait(timeout=limits["container_timeout"])
             except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
                 container.kill()
-                return [RawResult("timeout", "", "Wall-clock limit exceeded", int(s.sandbox_total_timeout_s * 1000))
-                        for _ in inputs]
+                return [RawResult("timeout", "", "Overall time limit exceeded", 0) for _ in inputs]
             logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
         finally:
             try:
@@ -136,12 +193,12 @@ class DockerSandbox(Sandbox):
                 pass
         idx = logs.rfind(RESULT_MARKER)
         if idx == -1:
-            # Harness itself died (e.g. OOM-killed) - report as runtime error on every test.
-            return [RawResult("runtime_error", "", logs[-2000:] or "Process killed (memory limit?)", 0) for _ in inputs]
+            # The harness itself died (e.g. the whole container was OOM-killed).
+            return [RawResult("memory", "", logs[-2000:] or "Process killed (memory limit?)", 0) for _ in inputs]
         return [RawResult(**r) for r in json.loads(logs[idx + len(RESULT_MARKER):].strip().splitlines()[0])]
 
     async def execute(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
-        if language not in LANGUAGES:
+        if language not in enabled_languages():
             raise SandboxError(f"Unsupported language: {language}")
         async with self._sem:
             return await anyio.to_thread.run_sync(self._run_blocking, language, code, inputs)
@@ -151,14 +208,16 @@ def _normalize(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.strip().splitlines())
 
 
+STATUS_VERDICT = {"timeout": "time_limit_exceeded", "memory": "memory_limit_exceeded",
+                  "compile_error": "compile_error", "runtime_error": "runtime_error"}
+
+
 def grade(raw: list[RawResult], expected: list[str | None], hidden: list[bool], inputs: list[str]) -> dict:
     """Compare outputs with expected values and compute a verdict. Hidden test details are withheld."""
     results, passed, verdict = [], 0, "accepted"
     for i, (r, exp, hid, inp) in enumerate(zip(raw, expected, hidden, inputs)):
-        if r.status == "timeout":
-            status = "time_limit_exceeded"
-        elif r.status != "ok":
-            status = "runtime_error"
+        if r.status != "ok":
+            status = STATUS_VERDICT.get(r.status, "runtime_error")
         elif exp is None:
             status = "ran"
         else:
@@ -167,10 +226,12 @@ def grade(raw: list[RawResult], expected: list[str | None], hidden: list[bool], 
         passed += ok
         if not ok and verdict == "accepted":
             verdict = status
+        # Compiler output is about the candidate's own code, so it's shown even for hidden tests.
+        show_stderr = not hid or status == "compile_error"
         results.append({
             "index": i, "status": status, "passed": ok, "hidden": hid, "time_ms": r.time_ms,
             "input": None if hid else inp, "expected": None if hid else exp,
-            "stdout": None if hid else r.stdout[:4000], "stderr": None if hid else r.stderr[-4000:],
+            "stdout": None if hid else r.stdout[:4000], "stderr": r.stderr[-4000:] if show_stderr else None,
         })
     return {
         "verdict": verdict, "passed": passed, "total": len(raw),
@@ -195,13 +256,15 @@ class QueueSandbox(Sandbox):
         return self._pool
 
     async def execute(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
-        if language not in LANGUAGES:
+        if language not in enabled_languages():
             raise SandboxError(f"Unsupported language: {language}")
+        s = self.settings
+        # Generous: queue wait + compile + every test at its wall limit.
+        timeout = s.sandbox_compile_wall_s + len(inputs) * max(s.sandbox_wall_limit_s, s.sandbox_cpu_limit_s * 6) + 60
         try:
             pool = await self._get_pool()
             job = await pool.enqueue_job("run_code", language, code, inputs)
-            # Generous: covers queue wait plus the container's own wall-clock limit.
-            data = await job.result(timeout=self.settings.sandbox_total_timeout_s + 40, poll_delay=0.05)
+            data = await job.result(timeout=timeout, poll_delay=0.05)
         except TimeoutError as e:
             raise SandboxError("Code runner is busy, please try again") from e
         except Exception as e:  # noqa: BLE001  (Redis down, worker crashed, job failed)
@@ -223,3 +286,12 @@ def get_sandbox() -> Sandbox:
         else:
             _sandbox = DockerSandbox()
     return _sandbox
+
+
+if __name__ == "__main__":
+    # Pre-build sandbox images:  python -m app.services.sandbox [language ...]
+    import sys
+
+    logging.basicConfig(level=logging.INFO)
+    for t in DockerSandbox().ensure_images(sys.argv[1:] or None):
+        print("ready:", t)

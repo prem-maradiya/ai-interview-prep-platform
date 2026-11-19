@@ -24,27 +24,30 @@ async def get_visible_problem(db: AsyncSession, problem_id: str, user: User) -> 
 def to_out(p: Problem) -> ProblemOut:
     return ProblemOut(
         id=p.id, title=p.title, description=p.description, difficulty=p.difficulty, tags=p.tags,
-        starter_code=p.starter_code, is_global=p.tenant_id is None,
+        companies=p.companies or [], starter_code=p.starter_code, is_global=p.tenant_id is None,
         sample_tests=[TestCaseOut.model_validate(t) for t in p.tests if not t.is_hidden],
         hidden_test_count=sum(t.is_hidden for t in p.tests),
     )
 
 
 @router.get("", response_model=list[ProblemSummary])
-async def list_problems(user: CurrentUser, db: DB, difficulty: str | None = None, tag: str | None = None):
+async def list_problems(user: CurrentUser, db: DB, difficulty: str | None = None, tag: str | None = None,
+                        company: str | None = None):
     q = select(Problem).where(visible_to(user)).order_by(Problem.created_at)
     if difficulty:
         q = q.where(Problem.difficulty == difficulty)
     problems = (await db.scalars(q)).all()
     if tag:
         problems = [p for p in problems if tag in p.tags]
+    if company:
+        problems = [p for p in problems if company.lower() in (c.lower() for c in (p.companies or []))]
     solved = set(
         (await db.scalars(
             select(Submission.problem_id).where(Submission.user_id == user.id, Submission.verdict == "accepted")
         )).all()
     )
     return [
-        ProblemSummary(id=p.id, title=p.title, difficulty=p.difficulty, tags=p.tags,
+        ProblemSummary(id=p.id, title=p.title, difficulty=p.difficulty, tags=p.tags, companies=p.companies or [],
                        is_global=p.tenant_id is None, solved=p.id in solved)
         for p in problems
     ]
@@ -69,6 +72,7 @@ def _apply(problem: Problem, body: ProblemIn) -> None:
     problem.description = body.description
     problem.difficulty = body.difficulty
     problem.tags = body.tags
+    problem.companies = body.companies
     problem.starter_code = body.starter_code
     problem.tests = [TestCase(position=i, **t.model_dump()) for i, t in enumerate(body.tests)]
 
