@@ -6,8 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.api.routes import (
-    analytics, assignments, auth, documents, engagement, interviews, notifications, org, practice, problems, review,
-    submissions,
+    analytics, assignments, auth, documents, engagement, interviews, notifications, oauth, org, practice, problems,
+    review, submissions,
 )
 from app.core.config import get_settings
 from app.db import models  # noqa: F401  (register tables)
@@ -38,7 +38,7 @@ def create_app() -> FastAPI:
         CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
         allow_methods=["*"], allow_headers=["*"],
     )
-    for r in (auth.router, org.router, problems.router, submissions.router, interviews.router, analytics.router,
+    for r in (auth.router, oauth.router, org.router, problems.router, submissions.router, interviews.router, analytics.router,
               documents.router, practice.router, assignments.router, review.router, notifications.router,
               engagement.router):
         app.include_router(r, prefix="/api")

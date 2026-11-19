@@ -59,6 +59,25 @@ class User(Base):
     tenant: Mapped[Tenant] = relationship(lazy="joined")
 
 
+class OAuthIdentity(Base):
+    """A sign-in identity from an external provider (Google, Microsoft, GitHub) linked to a user.
+
+    Users are per-organization, so the same Google account can be linked to one user in each org.
+    `subject` is the provider's stable user id (never the email, which can change).
+    """
+
+    __tablename__ = "oauth_identities"
+    __table_args__ = (UniqueConstraint("tenant_id", "provider", "subject"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    subject: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Invite(Base):
     __tablename__ = "invites"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

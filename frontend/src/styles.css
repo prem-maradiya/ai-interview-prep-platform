@@ -159,6 +159,14 @@ a.list-card:hover, a.level-card:hover { border-color: var(--accent); }
 .badge.locked { opacity: .45; filter: grayscale(1); }
 .badge.earned { border-color: var(--accent); }
 
+/* Phase 5: social sign-in */
+button.social { display: flex; align-items: center; justify-content: center; gap: .55rem; width: 100%; font-weight: 600; padding: .6rem; }
+button.social:hover:not(:disabled) { border-color: var(--accent); }
+.divider { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .8rem; }
+.divider::before, .divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.ok-note { border-color: var(--ok); color: var(--ok); }
+.account .task-row { align-items: center; }
+
 @media (max-width: 900px) {
   .solve, .grid2, .grid3, .interview-split { grid-template-columns: 1fr; }
   .topbar { flex-wrap: wrap; gap: .6rem; padding: .7rem 16px; }

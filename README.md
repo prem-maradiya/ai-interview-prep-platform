@@ -26,6 +26,7 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 |---|---|
 | **Multi-tenancy** | Shared-schema isolation: every tenant row has `tenant_id`, taken from the verified JWT and never from request input. Cross-tenant lookups return 404. Global problem bank shared by all tenants plus org-private problems. |
 | **Auth & RBAC** | Org self-signup, login by org slug, single-use invite codes (optionally email-locked). Roles: `owner > admin > mentor > candidate`. 15-minute access JWTs plus **rotating refresh tokens** tracked server-side: re-using an old refresh token revokes the whole session (theft detection). Logout and deactivating a member revoke their tokens. |
+| **Social sign-in** | Sign in, join with an invite, or create an organization with **Google, Microsoft or GitHub** (OAuth 2.0 authorization code + PKCE, `state` checked against an HttpOnly cookie). Accounts are matched by email only when the provider has *verified* it, so a Microsoft account showing someone else's address can't take over their account. Users can link and unlink providers and set a password on the Account page. Each button appears only when its keys are configured. |
 | **Abuse protection** | Rate limits on login (per IP + account), signup, invite acceptance and refresh, Redis-backed so they hold across API replicas. nginx overwrites `X-Forwarded-For`, so clients can't spoof their IP. Constant-time login for unknown accounts. Production mode refuses to start with a weak JWT secret or without the job queue. |
 | **Code judge** | **Python, JavaScript, Java, C++ and Go**. stdin/stdout problems with sample + hidden tests; verdicts: accepted, wrong answer, compile error (with compiler output), runtime error, time limit and memory limit exceeded. Custom-input runs, per-language drafts and starter templates. Hidden test inputs and outputs are never returned. 13 seeded problems (easy → hard) with company tags. |
 | **Docker sandbox** | Runs on a separate **worker** process fed by a Redis job queue (arq). Only the worker has the Docker socket; the API never does. Fresh container per run from a small per-language Alpine image: `--network none`, read-only rootfs, tmpfs, per-language memory and PID limits, `cap-drop ALL`, `no-new-privileges`, uid `nobody`, optional gVisor (`SANDBOX_RUNTIME=runsc`). **Time limits are CPU time, enforced by the kernel (`RLIMIT_CPU`)**, so verdicts are the same on a busy laptop and a fast server; a separate wall-clock limit catches programs that sleep or block. Expected outputs never enter the container. |
@@ -121,6 +122,34 @@ backend/app/
   db/models.py         ORM models
 ```
 
+## Social sign-in setup
+
+Each provider needs an app registration, which you create in your own account. Use this redirect URL, replacing the host with your `PUBLIC_URL`:
+
+```
+http://localhost:3080/api/auth/oauth/<provider>/callback      # <provider> = google | microsoft | github
+```
+
+| Provider | Where to create it | Notes |
+|---|---|---|
+| Google | Google Cloud Console → APIs & Services → Credentials → *Create OAuth client ID* → Web application | Add the redirect URL under *Authorized redirect URIs*. Scopes: `openid email profile`. |
+| Microsoft | Azure portal → Microsoft Entra ID → App registrations → *New registration* | Platform *Web*, add the redirect URL, then create a client secret. "Accounts in any organizational directory and personal Microsoft accounts" matches `MICROSOFT_TENANT=common`. |
+| GitHub | GitHub → Settings → Developer settings → OAuth Apps → *New OAuth App* | Set *Authorization callback URL* to the redirect URL. |
+
+Then put the keys in `.env` (they are never sent to the browser) and restart: `docker compose up -d`.
+
+```bash
+PUBLIC_URL=http://localhost:3080
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+```
+
+How it behaves:
+- **Sign in:** works for anyone already linked, or for an existing member whose *verified* provider email matches.
+- **Join with an invite:** creates the account; invites locked to an email need a verified matching email.
+- **New organization:** needs a verified email.
+- **Social-only accounts:** can add a password later on the Account page.
+
 ## Running on any machine
 
 - **Requirements:** Docker (Docker Desktop on Windows/macOS) with about 3 GB of free disk for all five language images, and 2 GB of RAM for Docker. Each service has a memory cap in `docker-compose.yml`, so the stack itself stays well under that.
@@ -131,7 +160,7 @@ backend/app/
 
 ## Roadmap (next features)
 - **Email notifications** (in-app notifications are done) and a weekly progress digest for mentors.
-- **Billing and SSO:** Stripe plans wired to quotas; Google / Microsoft sign-in for organizations.
+- **Billing:** Stripe plans wired to quotas (after the app is complete).
 - **Sandbox:** a warm container pool to cut per-run latency; function-signature problems; complexity checks via large hidden tests.
 - **Postgres row-level security** as defense in depth.
 - **Peer mock interviews** with a shared editor (WebSockets).

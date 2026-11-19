@@ -19,6 +19,19 @@ class Settings(BaseSettings):
     access_token_minutes: int = 15
     refresh_token_days: int = 7
 
+    # Public URL of the web app (what users type in the browser). OAuth redirect URIs are built from it:
+    #   {public_url}/api/auth/oauth/{provider}/callback
+    public_url: str = "http://localhost:3080"
+
+    # Social sign-in. A provider's button appears only when both its id and secret are set.
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: str | None = None
+    microsoft_tenant: str = "common"  # "common" = personal + work/school accounts
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+
     # LLM: "anthropic" uses the Claude API, "mock" is deterministic and needs no key
     llm_provider: str = "mock"
     llm_model: str = "claude-opus-5-5"

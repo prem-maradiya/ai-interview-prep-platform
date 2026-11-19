@@ -1,4 +1,4 @@
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { isStaff, useAuth } from "./lib/auth";
 import AuthPage from "./pages/AuthPage";
 import Dashboard from "./pages/Dashboard";
@@ -14,9 +14,14 @@ import MemberActivity from "./pages/MemberActivity";
 import AchievementsPage from "./pages/Achievements";
 import ProblemListPage from "./pages/ProblemLists";
 import NotificationBell from "./components/NotificationBell";
+import OAuthComplete from "./pages/OAuthComplete";
+import Account from "./pages/Account";
 
 export default function App() {
   const { user, loading, signOut } = useAuth();
+  const location = useLocation();
+  // Social sign-in lands here signed out; it must render before the auth gate.
+  if (location.pathname === "/oauth/complete" && !user) return <OAuthComplete />;
   if (loading) return <div className="center muted">Loading…</div>;
   if (!user) return <AuthPage />;
 
@@ -35,7 +40,7 @@ export default function App() {
         </nav>
         <NotificationBell />
         <span className="who">
-          {user.full_name} · <b>{user.tenant.name}</b> <span className="pill">{user.role}</span>
+          <Link to="/account" title="Account settings">{user.full_name}</Link> · <b>{user.tenant.name}</b> <span className="pill">{user.role}</span>
           <button className="link" onClick={signOut}>Sign out</button>
         </span>
       </header>
@@ -49,6 +54,8 @@ export default function App() {
           <Route path="/documents" element={<Documents />} />
           <Route path="/assignments" element={<Assignments />} />
           <Route path="/achievements" element={<AchievementsPage />} />
+          <Route path="/account" element={<Account />} />
+          <Route path="/oauth/complete" element={<OAuthComplete />} />
           <Route path="/lists/:id" element={<ProblemListPage />} />
           <Route path="/assignments/:id" element={<AssignmentDetail />} />
           <Route path="/submissions/:id" element={<SubmissionView />} />

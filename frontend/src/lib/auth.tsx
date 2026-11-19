@@ -5,6 +5,7 @@ type AuthCtx = {
   user: User | null;
   loading: boolean;
   signIn: (path: string, body: unknown) => Promise<void>;
+  completeSignIn: (t: Tokens) => Promise<void>;
   signOut: () => void;
 };
 
@@ -43,6 +44,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(await api<User>("/auth/me"));
   };
 
+  /** Finish a social sign-in: tokens arrive in the URL fragment of /oauth/complete. */
+  const completeSignIn = async (t: Tokens) => {
+    tokens.set(t);
+    setUser(await api<User>("/auth/me"));
+  };
+
   const signOut = () => {
     logout(); // revokes the refresh token server-side
     setUser(null);
@@ -51,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (loading && unreachable) {
     return <div className="center muted">Can't reach the server - retrying…</div>;
   }
-  return <Ctx.Provider value={{ user, loading, signIn, signOut }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, signIn, completeSignIn, signOut }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);
