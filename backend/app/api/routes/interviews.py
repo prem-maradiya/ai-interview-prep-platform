@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser, get_scoped
+from app.api.deps import DB, ROLE_RANK, CurrentUser, get_scoped
 from app.api.routes.documents import own_document
-from app.db.models import Interview, InterviewMessage
+from app.db.models import Interview, InterviewMessage, Role
 from app.db.session import SessionLocal
 from app.schemas import (
     InterviewIn, InterviewOut, InterviewRunIn, InterviewSummary, MessageIn, MessageOut, RunOut,
@@ -93,7 +93,12 @@ async def list_interviews(user: CurrentUser, db: DB):
 
 @router.get("/{interview_id}", response_model=InterviewOut)
 async def get_interview(interview_id: str, user: CurrentUser, db: DB):
-    return await _own_interview(db, interview_id, user)
+    """Owners see their interview; mentors+ can read any interview in their org (to review and comment).
+    Only the owner can answer, run code or end it."""
+    iv = await get_scoped(db, Interview, interview_id, user.tenant_id)
+    if iv.user_id != user.id and ROLE_RANK[Role(user.role)] < ROLE_RANK[Role.mentor]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview not found")
+    return iv
 
 
 @router.post("/{interview_id}/messages", response_model=list[MessageOut])

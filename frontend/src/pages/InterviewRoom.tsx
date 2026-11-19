@@ -4,6 +4,8 @@ import Editor from "@monaco-editor/react";
 import Markdown from "react-markdown";
 import { api, apiStream, type Interview, type Message, type RunResult, type Scorecard } from "../lib/api";
 import { listen, speak, stopSpeaking, voiceSupport, type Listener } from "../lib/voice";
+import { useAuth } from "../lib/auth";
+import CommentThread from "../components/CommentThread";
 
 const STARTER: Record<string, string> = {
   python: "# Sketch your solution here. The interviewer sees it when you send your next answer.\n\n",
@@ -12,6 +14,7 @@ const STARTER: Record<string, string> = {
 
 export default function InterviewRoom() {
   const { id } = useParams();
+  const { user } = useAuth();
   const [iv, setIv] = useState<Interview | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState("");
@@ -148,7 +151,9 @@ export default function InterviewRoom() {
   }
 
   if (!iv) return <div className="muted">Loading…</div>;
-  const active = iv.status === "active";
+  const isOwner = iv.user_id === user?.id;
+  // Mentors can open a candidate's interview to review it, but only the owner can take part.
+  const active = iv.status === "active" && isOwner;
   const technical = iv.kind === "technical";
 
   const chat = (
@@ -217,6 +222,7 @@ export default function InterviewRoom() {
       {voiceOn && !voiceSupport.recognition && (
         <div className="small muted">This browser can read questions aloud but doesn't support speech input; try Chrome or Edge to answer by voice.</div>
       )}
+      {!isOwner && <div className="small muted">You're reviewing a candidate's interview (read-only).</div>}
       {iv.scorecard && <ScorecardView s={iv.scorecard} />}
       {technical ? (
         <div className="interview-split">
@@ -247,6 +253,7 @@ export default function InterviewRoom() {
           </div>
         </div>
       ) : chat}
+      {(iv.status === "completed" || !isOwner) && <CommentThread targetType="interview" targetId={iv.id} />}
     </div>
   );
 }

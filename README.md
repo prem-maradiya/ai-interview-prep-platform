@@ -21,6 +21,10 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 | **Code in interviews** | Technical interviews have a Monaco editor beside the chat. Your code is sent with each answer (only when it changed) so the interviewer can react to it, and you can run it in the sandbox on custom input. |
 | **Voice mode** | Speak answers (browser Speech Recognition) and hear questions read aloud (speech synthesis), with no server cost. Spoken answers get **delivery feedback** in the scorecard: words per answer, filler words ("um", "basically"…) and tips. |
 | **Daily study plan** | Spaced repetition (simplified SM-2) schedules every attempted problem: solved ones come back after 1, 3, then ~8+ days; failed ones tomorrow. "Today's plan" shows due reviews, new problems ranked by your weak tags and level, a suggested interview for your weakest rubric area, and your streak. |
+| **Assignments** | Mentors assign problems and/or mock interviews (a kind and count) with a deadline, to all candidates or selected ones. Progress is computed live from real work done after the assignment was created: not started / in progress / completed / late / overdue, with a per-candidate progress table. |
+| **Mentor review** | Mentors open any candidate's interview (read-only) or submission and leave feedback in a thread the candidate can reply to. A member page shows each candidate's recent interviews and submissions. |
+| **Integrity signals** | The editor reports paste volume, tab switches and time spent with each submission. The server flags paste-heavy code, frequent tab switching, very fast solves of medium/hard problems, and code that matches another member's accepted solution **after renaming variables and removing comments**. Signals are shown only to mentors, labelled as hints, not proof. |
+| **CSV exports** | Cohort report and per-assignment progress as CSV. Cells that spreadsheets would execute as formulas (`=`, `+`, `-`, `@`) are neutralised (CSV-injection safe). |
 | **AI coaching** | AI code review on any submission (correctness, complexity, style), cached per submission. 3-level progressive hints that never give the full solution. |
 | **Analytics** | Candidate dashboard: solved by difficulty, acceptance rate, interview score trend, weakest rubric dimensions. Mentor view: cohort leaderboard. |
 | **Quotas** | Per-tenant, per-plan limits on AI requests (monthly) and code runs (daily), metered in `usage_events`. 429 when exceeded. |
@@ -91,6 +95,9 @@ backend/app/
   api/routes/          auth, org, problems, submissions, interviews, analytics
   services/sandbox.py  Docker executor, queue client + grader
   services/ratelimit.py Redis / in-memory rate limiter
+  services/integrity.py integrity signals + code-similarity normaliser
+  services/assignments.py live assignment progress
+  services/csv_export.py CSV export, formula-injection safe
   worker.py            arq worker that runs sandbox jobs
   services/llm.py      Anthropic + mock providers, prompts, scorecard schema
   services/quota.py    per-plan metering
@@ -98,8 +105,7 @@ backend/app/
 ```
 
 ## Roadmap (next features)
-- **Organization features (Phase 3):** mentor assignments with deadlines, mentor comments on transcripts and submissions,
-  integrity signals (paste / tab-switch / cross-submission similarity), CSV cohort exports.
+- **Notifications:** email or in-app alerts for new assignments, approaching deadlines and mentor feedback.
 - **Sandbox:** CPU-time (not wall-clock) limits so a busy host can't cause false TLEs; a warm container pool to cut latency.
 - **Postgres row-level security** as defense in depth.
 - **More languages** (Java, C++, Go), function-signature problems, and complexity checks via large hidden tests.

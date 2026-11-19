@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { Link } from "react-router-dom";
+import { api, apiDownload, type IntegrityFlag } from "../lib/api";
 import { isAdmin, useAuth } from "../lib/auth";
+
+type IntegrityItem = {
+  submission_id: string; user_id: string; full_name: string; problem_title: string; verdict: string;
+  created_at: string; flags: IntegrityFlag[];
+};
 
 type Member = { id: string; email: string; full_name: string; role: string; is_active: boolean };
 type Invite = { id: string; code: string; email: string | null; role: string; expires_at: string; used_at: string | null };
@@ -12,6 +18,7 @@ export default function OrgAdmin() {
   const admin = isAdmin(user);
   const [usage, setUsage] = useState<Usage>({});
   const [board, setBoard] = useState<Row[]>([]);
+  const [integrity, setIntegrity] = useState<IntegrityItem[] | null>(null); // null = still loading
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [inv, setInv] = useState({ email: "", role: "candidate" });
@@ -21,6 +28,7 @@ export default function OrgAdmin() {
     const org = await api<{ usage: Usage }>("/org");
     setUsage(org.usage);
     setBoard((await api<{ leaderboard: Row[] }>("/analytics/org")).leaderboard);
+    setIntegrity(await api<IntegrityItem[]>("/integrity"));
     if (admin) {
       setMembers(await api<Member[]>("/org/members"));
       setInvites(await api<Invite[]>("/org/invites"));
@@ -63,18 +71,36 @@ export default function OrgAdmin() {
       </div>
 
       <div className="card">
-        <h3>Cohort leaderboard</h3>
+        <div className="row between">
+          <h3>Cohort leaderboard</h3>
+          <button onClick={() => apiDownload("/analytics/org/export.csv", "cohort-report.csv")}>Export CSV</button>
+        </div>
         <table className="table">
           <thead><tr><th>Member</th><th>Role</th><th>Solved</th><th>Submissions</th><th>Interviews</th><th>Avg score</th></tr></thead>
           <tbody>
             {board.map((r) => (
               <tr key={r.user_id}>
-                <td>{r.full_name}</td><td>{r.role}</td><td>{r.problems_solved}</td><td>{r.submissions}</td>
+                <td><Link to={`/org/members/${r.user_id}`}>{r.full_name}</Link></td><td>{r.role}</td><td>{r.problems_solved}</td><td>{r.submissions}</td>
                 <td>{r.interviews_completed}</td><td>{r.avg_interview_score ?? "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="card">
+        <h3>Integrity signals <span className="small muted">(hints to look closer at, not proof)</span></h3>
+        {integrity === null && <p className="muted small">Loading…</p>}
+        {integrity?.length === 0 && <p className="muted small">No flagged submissions.</p>}
+        {integrity?.map((it) => (
+          <div key={it.submission_id} className="task-row">
+            <div className="row between">
+              <span><Link to={`/org/members/${it.user_id}`}>{it.full_name}</Link> · <Link to={`/submissions/${it.submission_id}`}>{it.problem_title}</Link></span>
+              <span className="small muted">{new Date(it.created_at).toLocaleString()}</span>
+            </div>
+            {it.flags.map((f) => <div key={f.type} className="small"><span className={`pill sev-${f.severity}`}>{f.severity}</span> {f.detail}</div>)}
+          </div>
+        ))}
       </div>
 
       {admin && (

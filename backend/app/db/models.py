@@ -117,6 +117,10 @@ class Submission(Base):
     runtime_ms: Mapped[int] = mapped_column(Integer, default=0)
     results: Mapped[list] = mapped_column(JSON, default=list)
     ai_review: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Editor telemetry sent by the client (paste/tab-switch counts, time spent) and the integrity
+    # signals derived from it plus code similarity. Signals are hints for mentors, not verdicts.
+    telemetry: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    integrity_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
@@ -199,6 +203,48 @@ class ReviewItem(Base):
     last_verdict: Mapped[str | None] = mapped_column(String(30), nullable=True)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Assignment(Base):
+    """Work a mentor assigns: problems to solve and/or mock interviews to complete, by a deadline."""
+
+    __tablename__ = "assignments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    problem_ids: Mapped[list] = mapped_column(JSON, default=list)
+    interview_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    interview_count: Mapped[int] = mapped_column(Integer, default=0)
+    assign_all: Mapped[bool] = mapped_column(Boolean, default=True)  # every candidate, including future ones
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+    members: Mapped[list["AssignmentMember"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+
+
+class AssignmentMember(Base):
+    __tablename__ = "assignment_members"
+    __table_args__ = (UniqueConstraint("assignment_id", "user_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    assignment_id: Mapped[str] = mapped_column(ForeignKey("assignments.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+
+class Comment(Base):
+    """Mentor feedback (and candidate replies) on an interview or a submission."""
+
+    __tablename__ = "comments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    author_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    target_type: Mapped[str] = mapped_column(String(20))  # interview | submission
+    target_id: Mapped[str] = mapped_column(String(36), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    author: Mapped[User] = relationship(lazy="joined")
 
 
 class RefreshToken(Base):

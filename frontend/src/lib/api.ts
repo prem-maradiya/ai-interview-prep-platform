@@ -122,7 +122,10 @@ export type TestCase = { id: string; input: string; expected_output: string; is_
 export type Problem = ProblemSummary & { description: string; starter_code: Record<string, string>; sample_tests: TestCase[]; hidden_test_count: number };
 export type TestResult = { index: number; status: string; passed: boolean; hidden: boolean; time_ms: number; input?: string; expected?: string; stdout?: string; stderr?: string };
 export type RunResult = { verdict: string; passed: number; total: number; runtime_ms: number; results: TestResult[] };
-export type Submission = RunResult & { id: string; problem_id: string; language: string; code: string; ai_review: string | null; created_at: string };
+export type Submission = RunResult & {
+  id: string; user_id: string; problem_id: string; language: string; code: string; ai_review: string | null; created_at: string;
+  telemetry?: Record<string, number> | null; integrity_flags?: IntegrityFlag[] | null; // staff only
+};
 export type Message = {
   seq: number; sender: "interviewer" | "candidate"; content: string; created_at: string;
   input_mode?: "text" | "voice"; code?: string | null; code_language?: string | null;
@@ -141,6 +144,34 @@ export type Plan = {
   streak_days: number; practiced_today: boolean; due_reviews: PlanItem[]; due_count: number; new_problems: PlanItem[];
   suggested_interview: { kind: string; focus: string; reason: string }; learned_count: number; next_review_at: string | null;
 };
+
+export type IntegrityFlag = { type: string; severity: "high" | "medium" | "low"; detail: string };
+export type Comment = { id: string; author_id: string; author_name: string; author_role: string; body: string; created_at: string };
+export type AssignmentProgress = {
+  user_id: string; full_name: string; email: string; status: "completed" | "late" | "overdue" | "in_progress" | "not_started";
+  done: number; total: number; solved_problem_ids: string[]; interviews_done: number; completed_at: string | null;
+};
+export type Assignment = {
+  id: string; title: string; description: string; due_at: string; created_at: string;
+  problems: { id: string; title: string; difficulty: string }[];
+  interview_kind: string | null; interview_count: number; assign_all: boolean;
+  assignee_count?: number; completed_count?: number; my_progress?: AssignmentProgress; progress?: AssignmentProgress[];
+};
+
+/** Download an authenticated file (e.g. CSV export) and save it with the server-provided name. */
+export async function apiDownload(path: string, fallbackName: string): Promise<void> {
+  const send = () => fetch(`/api${path}`, { headers: { Authorization: `Bearer ${tokens.get() ?? ""}` } });
+  let r = await send();
+  if (r.status === 401 && (await tryRefresh())) r = await send();
+  if (!r.ok) throw new ApiError(r.status, r.statusText);
+  const name = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await r.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 /** Multipart upload (no JSON content-type, so the browser sets the boundary). */
 export async function apiUpload<T = any>(path: string, form: FormData): Promise<T> {
@@ -164,7 +195,7 @@ export type Scorecard = {
   delivery?: Delivery;
 };
 export type Interview = {
-  id: string; kind: string; role_title: string; level: string; focus: string; status: string;
+  id: string; user_id: string; kind: string; role_title: string; level: string; focus: string; status: string;
   overall_score: number | null; scorecard: Scorecard | null; created_at: string; messages: Message[];
   has_resume?: boolean; has_job_description?: boolean; code?: string | null; code_language?: string | null;
 };

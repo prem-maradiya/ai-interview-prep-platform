@@ -137,6 +137,7 @@ class RunIn(BaseModel):
     language: Language
     code: str = Field(max_length=50_000)
     custom_input: str | None = Field(default=None, max_length=10_000)
+    telemetry: "Telemetry | None" = None  # used on submit only
 
 
 class TestResultOut(BaseModel):
@@ -161,6 +162,7 @@ class RunOut(BaseModel):
 
 class SubmissionOut(ORM):
     id: str
+    user_id: str
     problem_id: str
     language: str
     code: str
@@ -173,6 +175,12 @@ class SubmissionOut(ORM):
     created_at: datetime
 
 
+class StaffSubmissionOut(SubmissionOut):
+    """What mentors see: the submission plus integrity signals (candidates don't see these)."""
+    telemetry: dict | None = None
+    integrity_flags: list[dict] | None = None
+
+
 class HintIn(BaseModel):
     language: Language = "python"
     code: str = Field(default="", max_length=50_000)
@@ -181,6 +189,41 @@ class HintIn(BaseModel):
 
 class TextOut(BaseModel):
     text: str
+
+
+# ---------- assignments, comments, integrity ----------
+class AssignmentIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    due_at: datetime
+    problem_ids: list[str] = Field(default=[], max_length=50)
+    interview_kind: InterviewKind | None = None
+    interview_count: int = Field(default=0, ge=0, le=10)
+    assign_all: bool = True
+    assignee_ids: list[str] = Field(default=[], max_length=500)
+
+
+class CommentIn(BaseModel):
+    target_type: Literal["interview", "submission"]
+    target_id: str
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class CommentOut(BaseModel):
+    id: str
+    author_id: str
+    author_name: str
+    author_role: str
+    body: str
+    created_at: datetime
+
+
+class Telemetry(BaseModel):
+    """Editor activity the client reports with a submission. All optional; the server derives signals from it."""
+    paste_chars: int = Field(default=0, ge=0, le=10_000_000)
+    paste_events: int = Field(default=0, ge=0, le=100_000)
+    tab_switches: int = Field(default=0, ge=0, le=100_000)
+    time_spent_s: float | None = Field(default=None, ge=0, le=10_000_000)
 
 
 # ---------- documents ----------
@@ -250,6 +293,7 @@ class MessageOut(ORM):
 
 class InterviewOut(ORM):
     id: str
+    user_id: str
     kind: str
     role_title: str
     level: str

@@ -6,7 +6,8 @@ from sqlalchemy import select
 from app.api.deps import DB, ROLE_RANK, CurrentUser, get_scoped
 from app.api.routes.problems import get_visible_problem
 from app.db.models import Role, Submission
-from app.schemas import HintIn, RunIn, RunOut, SubmissionOut, TextOut
+from app.schemas import HintIn, RunIn, RunOut, StaffSubmissionOut, SubmissionOut, TextOut
+from app.services.integrity import similarity_flag, telemetry_flags
 from app.services import quota
 from app.services.llm import LLMError, LLMProvider, get_llm
 from app.services.practice import record_attempt
@@ -53,15 +54,21 @@ async def submit_code(problem_id: str, body: RunIn, user: CurrentUser, db: DB, s
     inputs = [t.input for t in tests]
     raw = await _execute(sandbox, body.language, body.code, inputs)
     result = grade(raw, [t.expected_output for t in tests], [t.is_hidden for t in tests], inputs)
+    telemetry = body.telemetry.model_dump() if body.telemetry else None
     sub = Submission(
         tenant_id=user.tenant_id, user_id=user.id, problem_id=problem.id, language=body.language, code=body.code,
         verdict=result["verdict"], passed=result["passed"], total=result["total"],
-        runtime_ms=result["runtime_ms"], results=result["results"],
+        runtime_ms=result["runtime_ms"], results=result["results"], telemetry=telemetry,
     )
+    flags = telemetry_flags(body.code, telemetry, sub.verdict, problem.difficulty)
+    if similar := await similarity_flag(db, sub):
+        flags.append(similar)
+    severity = {"high": 0, "medium": 1, "low": 2}
+    sub.integrity_flags = sorted(flags, key=lambda f: severity[f["severity"]]) or None
     db.add(sub)
     await record_attempt(db, user, problem.id, sub.verdict)  # spaced-repetition schedule
     await db.commit()
-    return sub
+    return sub  # SubmissionOut: integrity signals are only shown to mentors
 
 
 @router.get("/submissions", response_model=list[SubmissionOut])
@@ -85,9 +92,12 @@ async def _get_submission(db, submission_id: str, user) -> Submission:
     return sub
 
 
-@router.get("/submissions/{submission_id}", response_model=SubmissionOut)
+@router.get("/submissions/{submission_id}", response_model=StaffSubmissionOut | SubmissionOut)
 async def get_submission(submission_id: str, user: CurrentUser, db: DB):
-    return await _get_submission(db, submission_id, user)
+    sub = await _get_submission(db, submission_id, user)
+    if ROLE_RANK[Role(user.role)] >= ROLE_RANK[Role.mentor]:
+        return StaffSubmissionOut.model_validate(sub)
+    return SubmissionOut.model_validate(sub)
 
 
 @router.post("/submissions/{submission_id}/review", response_model=SubmissionOut)

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import Markdown from "react-markdown";
 import { api, type Problem, type RunResult, type Submission } from "../lib/api";
@@ -23,6 +23,30 @@ export default function ProblemSolve() {
 
   const draftKey = (l: Lang) => `pf_draft_${id}_${l}`;
 
+  // Editor activity sent with submissions so mentors get integrity signals (paste-heavy, tab switching).
+  const telemetry = useRef({ paste_chars: 0, paste_events: 0, tab_switches: 0, opened_at: Date.now() });
+  useEffect(() => {
+    telemetry.current = { paste_chars: 0, paste_events: 0, tab_switches: 0, opened_at: Date.now() };
+    const onVisibility = () => {
+      if (document.hidden) telemetry.current.tab_switches += 1;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [id]);
+
+  function onEditorMount(editor: any) {
+    editor.onDidPaste((e: any) => {
+      const pasted = editor.getModel()?.getValueInRange(e.range) ?? "";
+      telemetry.current.paste_chars += pasted.length;
+      telemetry.current.paste_events += 1;
+    });
+  }
+
+  function telemetryPayload() {
+    const { opened_at, ...rest } = telemetry.current;
+    return { ...rest, time_spent_s: Math.round((Date.now() - opened_at) / 1000) };
+  }
+
   useEffect(() => {
     api<Problem>(`/problems/${id}`).then((p) => {
       setProblem(p);
@@ -45,7 +69,10 @@ export default function ProblemSolve() {
     setBusy(kind);
     setError("");
     try {
-      const body = { language: lang, code, custom_input: kind === "run" && useCustom ? customInput : undefined };
+      const body = {
+        language: lang, code, custom_input: kind === "run" && useCustom ? customInput : undefined,
+        telemetry: kind === "submit" ? telemetryPayload() : undefined,
+      };
       if (kind === "run") {
         setResult(await api<RunResult>(`/problems/${id}/run`, { body }));
         setSubmission(null);
@@ -118,7 +145,9 @@ export default function ProblemSolve() {
                 <button className="link" onClick={() => { setSubmission(s); setResult(s); }}>
                   <span className={`verdict ${s.verdict}`}>{s.verdict.replace(/_/g, " ")}</span>
                 </button>
-                <span className="muted">{s.language} · {s.passed}/{s.total} · {new Date(s.created_at).toLocaleString()}</span>
+                <span className="muted">
+                  {s.language} · {s.passed}/{s.total} · <Link to={`/submissions/${s.id}`}>{new Date(s.created_at).toLocaleString()}</Link>
+                </span>
               </div>
             ))}
           </>
@@ -136,7 +165,7 @@ export default function ProblemSolve() {
           </div>
         </div>
         <div className="editor">
-          <Editor height="100%" language={lang} theme="vs-dark" value={code} onChange={onCode}
+          <Editor height="100%" language={lang} theme="vs-dark" value={code} onChange={onCode} onMount={onEditorMount}
             options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false }} />
         </div>
         <label className="small"><input type="checkbox" checked={useCustom} onChange={(e) => setUseCustom(e.target.checked)} /> Run with custom input</label>

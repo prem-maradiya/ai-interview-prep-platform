@@ -8,6 +8,9 @@ import Interviews from "./pages/Interviews";
 import InterviewRoom from "./pages/InterviewRoom";
 import OrgAdmin from "./pages/OrgAdmin";
 import Documents from "./pages/Documents";
+import Assignments, { AssignmentDetail } from "./pages/Assignments";
+import SubmissionView from "./pages/SubmissionView";
+import MemberActivity from "./pages/MemberActivity";
 
 export default function App() {
   const { user, loading, signOut } = useAuth();
@@ -23,6 +26,7 @@ export default function App() {
           <NavLink to="/problems">Problems</NavLink>
           <NavLink to="/interviews">Mock interviews</NavLink>
           <NavLink to="/documents">Resume &amp; jobs</NavLink>
+          <NavLink to="/assignments">Assignments</NavLink>
           {isStaff(user) && <NavLink to="/org">Organization</NavLink>}
         </nav>
         <span className="who">
@@ -38,6 +42,10 @@ export default function App() {
           <Route path="/interviews" element={<Interviews />} />
           <Route path="/interviews/:id" element={<InterviewRoom />} />
           <Route path="/documents" element={<Documents />} />
+          <Route path="/assignments" element={<Assignments />} />
+          <Route path="/assignments/:id" element={<AssignmentDetail />} />
+          <Route path="/submissions/:id" element={<SubmissionView />} />
+          <Route path="/org/members/:id" element={isStaff(user) ? <MemberActivity /> : <Navigate to="/" />} />
           <Route path="/org" element={isStaff(user) ? <OrgAdmin /> : <Navigate to="/" />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

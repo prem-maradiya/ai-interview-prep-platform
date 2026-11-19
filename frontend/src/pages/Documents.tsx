@@ -6,12 +6,16 @@ const LABEL: Record<Kind, string> = { resume: "Resume", job_description: "Job de
 
 export default function Documents() {
   const [docs, setDocs] = useState<DocumentSummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [fit, setFit] = useState<FitReport | null>(null);
   const [pick, setPick] = useState({ resume: "", jd: "" });
   const [busy, setBusy] = useState(false);
 
-  const load = () => api<DocumentSummary[]>("/documents").then(setDocs);
+  const load = () =>
+    api<DocumentSummary[]>("/documents")
+      .then((d) => { setDocs(d); setLoaded(true); })
+      .catch((e) => setError(e.message));
   useEffect(() => {
     load();
   }, []);
@@ -48,7 +52,8 @@ export default function Documents() {
 
       <div className="card">
         <h3>Your documents</h3>
-        {docs.length === 0 && <p className="muted">Nothing added yet.</p>}
+        {!loaded && <p className="muted">Loading…</p>}
+        {loaded && docs.length === 0 && <p className="muted">Nothing added yet.</p>}
         {docs.map((d) => (
           <div key={d.id} className="row between doc-row">
             <div>
