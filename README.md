@@ -16,14 +16,21 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 | **Code judge** | Python and JavaScript, stdin/stdout problems, sample + hidden tests, verdicts (accepted / wrong answer / runtime error / TLE), custom-input runs, per-language drafts saved in the browser. Hidden test inputs and outputs are never returned. |
 | **Docker sandbox** | Runs on a separate **worker** process fed by a Redis job queue (arq). Only the worker has the Docker socket; the API never does. Fresh container per run: `--network none`, read-only rootfs, 16 MB tmpfs, 256 MB memory, 0.5 CPU, 64 PIDs, `cap-drop ALL`, `no-new-privileges`, uid `nobody`, per-test and wall-clock timeouts, optional gVisor (`SANDBOX_RUNTIME=runsc`). Expected outputs never enter the container. |
 | **AI mock interviews** | Behavioral / technical (DSA) / system design, tuned by role, level and focus. The interviewer asks one question per turn, follows up, and its replies **stream word by word** over Server-Sent Events. Ending the interview produces a structured scorecard: 5 rubric dimensions (1–5), overall 0–100, hire signal, strengths, improvements and topics to practice. |
+| **Resume & job fit** | Upload a resume or job description (PDF/TXT/MD, text extracted server-side, file discarded) or paste it. Private to the owner, even within the org. A **fit report** gives a match score, matched/missing skills, truthful resume edits and likely questions. |
+| **Tailored interviews** | Start any interview from a resume and/or job description: questions target your actual projects and the role's requirements, and the scorecard is calibrated to the job. Documents are snapshotted at start. |
+| **Code in interviews** | Technical interviews have a Monaco editor beside the chat. Your code is sent with each answer (only when it changed) so the interviewer can react to it, and you can run it in the sandbox on custom input. |
+| **Voice mode** | Speak answers (browser Speech Recognition) and hear questions read aloud (speech synthesis), with no server cost. Spoken answers get **delivery feedback** in the scorecard: words per answer, filler words ("um", "basically"…) and tips. |
+| **Daily study plan** | Spaced repetition (simplified SM-2) schedules every attempted problem: solved ones come back after 1, 3, then ~8+ days; failed ones tomorrow. "Today's plan" shows due reviews, new problems ranked by your weak tags and level, a suggested interview for your weakest rubric area, and your streak. |
 | **AI coaching** | AI code review on any submission (correctness, complexity, style), cached per submission. 3-level progressive hints that never give the full solution. |
 | **Analytics** | Candidate dashboard: solved by difficulty, acceptance rate, interview score trend, weakest rubric dimensions. Mentor view: cohort leaderboard. |
 | **Quotas** | Per-tenant, per-plan limits on AI requests (monthly) and code runs (daily), metered in `usage_events`. 429 when exceeded. |
 
 ### LLM integration
 `LLM_PROVIDER=anthropic` uses Claude (`claude-opus-5-5` by default). Chat turns run at low effort for latency; scorecards use
-structured outputs (`messages.parse` with a Pydantic schema). Interview turns enable server-side refusal fallbacks.
-Candidate text is always sent as user content and never interpolated into system prompts.
+structured outputs (`messages.parse` with a Pydantic schema), as do fit reports. Interview turns enable server-side refusal
+fallbacks and **prompt caching** (each turn resends the growing conversation, so the prefix is cached).
+Candidate text (answers, code, resumes, job descriptions) is always sent as tagged user content, never interpolated into
+system prompts, and the model is told to treat it as data.
 `LLM_PROVIDER=mock` (the default) is a deterministic offline provider, so the whole app runs and tests pass without an API key.
 
 ## Run it
@@ -91,10 +98,10 @@ backend/app/
 ```
 
 ## Roadmap (next features)
-- **Resume / JD upload**: tailor interview questions to a candidate's resume and the target job description.
-- **Voice interviews** (speech-to-text in, TTS out) and a **shared code editor** inside technical interviews.
-- **Postgres row-level security** as defense in depth; a warm pool of sandbox containers to cut run latency.
+- **Organization features (Phase 3):** mentor assignments with deadlines, mentor comments on transcripts and submissions,
+  integrity signals (paste / tab-switch / cross-submission similarity), CSV cohort exports.
+- **Sandbox:** CPU-time (not wall-clock) limits so a busy host can't cause false TLEs; a warm container pool to cut latency.
+- **Postgres row-level security** as defense in depth.
 - **More languages** (Java, C++, Go), function-signature problems, and complexity checks via large hidden tests.
-- **Spaced-repetition practice plans** built from weak rubric dimensions; daily streaks.
-- **Peer mock interviews** with shared editor (WebSockets) and mentor review of transcripts.
+- **Peer mock interviews** with a shared editor (WebSockets).
 - **Billing** (Stripe) wired to plans and quotas; SSO (SAML/OIDC) for enterprise tenants; audit log.

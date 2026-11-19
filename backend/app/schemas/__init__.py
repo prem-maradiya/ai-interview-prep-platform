@@ -183,22 +183,68 @@ class TextOut(BaseModel):
     text: str
 
 
+# ---------- documents ----------
+DocumentKind = Literal["resume", "job_description"]
+
+
+class DocumentIn(BaseModel):
+    kind: DocumentKind
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=30, max_length=30_000)
+
+
+class DocumentSummary(BaseModel):
+    id: str
+    kind: str
+    title: str
+    chars: int
+    preview: str
+    created_at: datetime
+
+
+class DocumentOut(ORM):
+    id: str
+    kind: str
+    title: str
+    text: str
+    created_at: datetime
+
+
+class FitIn(BaseModel):
+    resume_id: str
+    job_description_id: str
+
+
 # ---------- interviews ----------
 class InterviewIn(BaseModel):
     kind: InterviewKind
     role_title: str = Field(default="Software Engineer", max_length=120)
     level: Literal["intern", "junior", "mid", "senior", "staff"] = "junior"
     focus: str = Field(default="", max_length=300)
+    resume_id: str | None = None
+    job_description_id: str | None = None
 
 
 class MessageIn(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
+    input_mode: Literal["text", "voice"] = "text"
+    code: str | None = Field(default=None, max_length=50_000)
+    code_language: Language | None = None
+
+
+class InterviewRunIn(BaseModel):
+    language: Language
+    code: str = Field(max_length=50_000)
+    stdin: str = Field(default="", max_length=10_000)
 
 
 class MessageOut(ORM):
     seq: int
     sender: str
     content: str
+    input_mode: str = "text"
+    code: str | None = None
+    code_language: str | None = None
     created_at: datetime
 
 
@@ -213,6 +259,10 @@ class InterviewOut(ORM):
     scorecard: dict | None
     created_at: datetime
     completed_at: datetime | None
+    has_resume: bool = False
+    has_job_description: bool = False
+    code: str | None = None
+    code_language: str | None = None
     messages: list[MessageOut] = []
 
 

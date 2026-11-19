@@ -7,24 +7,31 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser, get_scoped
+from app.api.routes.documents import own_document
 from app.db.models import Interview, InterviewMessage
 from app.db.session import SessionLocal
-from app.schemas import InterviewIn, InterviewOut, InterviewSummary, MessageIn, MessageOut
+from app.schemas import (
+    InterviewIn, InterviewOut, InterviewRunIn, InterviewSummary, MessageIn, MessageOut, RunOut,
+)
 from app.services import quota
+from app.services.delivery import delivery_metrics
 from app.services.llm import InterviewContext, LLMError, LLMProvider, Turn, get_llm
+from app.services.sandbox import Sandbox, SandboxError, get_sandbox, grade
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
 LLMDep = Annotated[LLMProvider, Depends(get_llm)]
+SandboxDep = Annotated[Sandbox, Depends(get_sandbox)]
 
 MAX_CANDIDATE_TURNS = 20
 
 
 def _ctx(iv: Interview) -> InterviewContext:
-    return InterviewContext(kind=iv.kind, role_title=iv.role_title, level=iv.level, focus=iv.focus)
+    return InterviewContext(kind=iv.kind, role_title=iv.role_title, level=iv.level, focus=iv.focus,
+                            resume=iv.resume_text or "", job_description=iv.job_description_text or "")
 
 
 def _history(iv: Interview) -> list[Turn]:
-    return [Turn(m.sender, m.content) for m in iv.messages]
+    return [Turn(m.sender, m.content, m.code, m.code_language) for m in iv.messages]
 
 
 async def _own_interview(db, interview_id: str, user) -> Interview:
@@ -41,10 +48,34 @@ async def _ask(llm: LLMProvider, iv: Interview) -> str:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
 
 
+def _check_can_answer(iv: Interview) -> None:
+    if iv.status != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Interview already completed")
+    if sum(m.sender == "candidate" for m in iv.messages) >= MAX_CANDIDATE_TURNS:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Turn limit reached - end the interview to get feedback")
+
+
+def _add_answer(iv: Interview, body: MessageIn) -> InterviewMessage:
+    # Code is only attached when it changed since the last snapshot, to keep prompts small.
+    code = body.code if body.code and body.code.strip() and body.code != iv.code else None
+    answer = InterviewMessage(seq=len(iv.messages), sender="candidate", content=body.content,
+                              input_mode=body.input_mode, code=code, code_language=body.code_language if code else None)
+    if code:
+        iv.code, iv.code_language = code, body.code_language
+    iv.messages.append(answer)
+    return answer
+
+
 @router.post("", response_model=InterviewOut, status_code=201)
 async def start_interview(body: InterviewIn, user: CurrentUser, db: DB, llm: LLMDep):
+    """Start an interview, optionally tailored to one of your resumes and/or a job description."""
+    resume = await own_document(db, body.resume_id, user, "resume") if body.resume_id else None
+    jd = await own_document(db, body.job_description_id, user, "job_description") if body.job_description_id else None
     await quota.consume(db, user, "llm")
-    iv = Interview(tenant_id=user.tenant_id, user_id=user.id, **body.model_dump())
+    iv = Interview(
+        tenant_id=user.tenant_id, user_id=user.id, kind=body.kind, role_title=body.role_title, level=body.level,
+        focus=body.focus, resume_text=resume.text if resume else None, job_description_text=jd.text if jd else None,
+    )
     iv.messages = []
     first = await _ask(llm, iv)
     iv.messages.append(InterviewMessage(seq=0, sender="interviewer", content=first))
@@ -67,17 +98,12 @@ async def get_interview(interview_id: str, user: CurrentUser, db: DB):
 
 @router.post("/{interview_id}/messages", response_model=list[MessageOut])
 async def send_message(interview_id: str, body: MessageIn, user: CurrentUser, db: DB, llm: LLMDep):
-    """Send the candidate's answer; returns the candidate message and the interviewer's reply."""
+    """Send the candidate's answer (optionally with the editor's code); returns it plus the interviewer's reply."""
     iv = await _own_interview(db, interview_id, user)
-    if iv.status != "active":
-        raise HTTPException(status.HTTP_409_CONFLICT, "Interview already completed")
-    if sum(m.sender == "candidate" for m in iv.messages) >= MAX_CANDIDATE_TURNS:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Turn limit reached - end the interview to get feedback")
+    _check_can_answer(iv)
     await quota.consume(db, user, "llm")
-    seq = len(iv.messages)
-    answer = InterviewMessage(seq=seq, sender="candidate", content=body.content)
-    iv.messages.append(answer)
-    reply = InterviewMessage(seq=seq + 1, sender="interviewer", content=await _ask(llm, iv))
+    answer = _add_answer(iv, body)
+    reply = InterviewMessage(seq=answer.seq + 1, sender="interviewer", content=await _ask(llm, iv))
     iv.messages.append(reply)
     await db.commit()
     return [answer, reply]
@@ -94,17 +120,12 @@ async def send_message_stream(interview_id: str, body: MessageIn, user: CurrentU
     Events: `candidate` (saved answer), `delta` ({text}) repeated, then `done` (saved reply) or `error`.
     """
     iv = await _own_interview(db, interview_id, user)
-    if iv.status != "active":
-        raise HTTPException(status.HTTP_409_CONFLICT, "Interview already completed")
-    if sum(m.sender == "candidate" for m in iv.messages) >= MAX_CANDIDATE_TURNS:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Turn limit reached - end the interview to get feedback")
+    _check_can_answer(iv)
     await quota.consume(db, user, "llm")
-    seq = len(iv.messages)
-    answer = InterviewMessage(seq=seq, sender="candidate", content=body.content)
-    iv.messages.append(answer)
+    answer = _add_answer(iv, body)
     await db.commit()
     # Snapshot everything the stream needs: the request's DB session is not used after this point.
-    ctx, history, iv_id = _ctx(iv), _history(iv), iv.id
+    ctx, history, iv_id, seq = _ctx(iv), _history(iv), iv.id, answer.seq
     answer_out = MessageOut.model_validate(answer).model_dump(mode="json")
 
     async def events():
@@ -128,9 +149,24 @@ async def send_message_stream(interview_id: str, body: MessageIn, user: CurrentU
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@router.post("/{interview_id}/run", response_model=RunOut)
+async def run_interview_code(interview_id: str, body: InterviewRunIn, user: CurrentUser, db: DB, sandbox: SandboxDep):
+    """Run the interview editor's code on custom input (same sandbox as the judge)."""
+    iv = await _own_interview(db, interview_id, user)
+    if iv.status != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Interview already completed")
+    await quota.consume(db, user, "sandbox")
+    await db.commit()
+    try:
+        raw = await sandbox.execute(body.language, body.code, [body.stdin])
+    except SandboxError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
+    return grade(raw, [None], [False], [body.stdin])
+
+
 @router.post("/{interview_id}/end", response_model=InterviewOut)
 async def end_interview(interview_id: str, user: CurrentUser, db: DB, llm: LLMDep):
-    """Finish the interview and generate a rubric-based scorecard."""
+    """Finish the interview: rubric scorecard from the LLM, plus speaking metrics for voice answers."""
     iv = await _own_interview(db, interview_id, user)
     if iv.status == "completed":
         return iv
@@ -141,7 +177,11 @@ async def end_interview(interview_id: str, user: CurrentUser, db: DB, llm: LLMDe
         card = await llm.scorecard(_ctx(iv), _history(iv))
     except LLMError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
-    iv.scorecard = card.model_dump()
+    scorecard = card.model_dump()
+    delivery = delivery_metrics([m.content for m in iv.messages if m.sender == "candidate" and m.input_mode == "voice"])
+    if delivery:
+        scorecard["delivery"] = delivery
+    iv.scorecard = scorecard
     iv.overall_score = card.overall_score
     iv.status = "completed"
     iv.completed_at = datetime.now(timezone.utc)

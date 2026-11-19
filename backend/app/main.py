@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from app.api.routes import analytics, auth, interviews, org, problems, submissions
+from app.api.routes import analytics, auth, documents, interviews, org, practice, problems, submissions
 from app.core.config import get_settings
 from app.db import models  # noqa: F401  (register tables)
 from app.db.session import SessionLocal
@@ -35,7 +35,8 @@ def create_app() -> FastAPI:
         CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
         allow_methods=["*"], allow_headers=["*"],
     )
-    for r in (auth.router, org.router, problems.router, submissions.router, interviews.router, analytics.router):
+    for r in (auth.router, org.router, problems.router, submissions.router, interviews.router, analytics.router,
+              documents.router, practice.router):
         app.include_router(r, prefix="/api")
 
     @app.get("/api/health")

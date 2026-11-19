@@ -9,6 +9,7 @@ from app.db.models import Role, Submission
 from app.schemas import HintIn, RunIn, RunOut, SubmissionOut, TextOut
 from app.services import quota
 from app.services.llm import LLMError, LLMProvider, get_llm
+from app.services.practice import record_attempt
 from app.services.sandbox import Sandbox, SandboxError, get_sandbox, grade
 
 router = APIRouter(tags=["submissions"])
@@ -58,6 +59,7 @@ async def submit_code(problem_id: str, body: RunIn, user: CurrentUser, db: DB, s
         runtime_ms=result["runtime_ms"], results=result["results"],
     )
     db.add(sub)
+    await record_attempt(db, user, problem.id, sub.verdict)  # spaced-repetition schedule
     await db.commit()
     return sub
 

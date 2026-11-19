@@ -130,6 +130,12 @@ class Interview(Base):
     level: Mapped[str] = mapped_column(String(30))
     focus: Mapped[str] = mapped_column(String(300), default="")
     status: Mapped[str] = mapped_column(String(20), default="active")
+    # Snapshots taken at start, so the interview stays reproducible if the documents change later.
+    resume_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_description_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Latest state of the in-interview code editor (technical interviews).
+    code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
     scorecard: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
@@ -139,6 +145,14 @@ class Interview(Base):
         back_populates="interview", cascade="all, delete-orphan", order_by="InterviewMessage.seq", lazy="selectin"
     )
 
+    @property
+    def has_resume(self) -> bool:
+        return bool(self.resume_text)
+
+    @property
+    def has_job_description(self) -> bool:
+        return bool(self.job_description_text)
+
 
 class InterviewMessage(Base):
     __tablename__ = "interview_messages"
@@ -147,9 +161,44 @@ class InterviewMessage(Base):
     seq: Mapped[int] = mapped_column(Integer)
     sender: Mapped[str] = mapped_column(String(20))  # interviewer | candidate
     content: Mapped[str] = mapped_column(Text)
+    input_mode: Mapped[str] = mapped_column(String(10), default="text", server_default="text")  # text | voice
+    code: Mapped[str | None] = mapped_column(Text, nullable=True)  # editor snapshot sent with this answer
+    code_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     interview: Mapped[Interview] = relationship(back_populates="messages")
+
+
+class Document(Base):
+    """A candidate's resume or a target job description, stored as extracted plain text.
+    Private to its owner."""
+
+    __tablename__ = "documents"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # resume | job_description
+    title: Mapped[str] = mapped_column(String(200))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ReviewItem(Base):
+    """Spaced-repetition state for one (user, problem): when to revisit it, and how well it's known."""
+
+    __tablename__ = "review_items"
+    __table_args__ = (UniqueConstraint("user_id", "problem_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    problem_id: Mapped[str] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"), index=True)
+    ease: Mapped[float] = mapped_column(Float, default=2.5)
+    interval_days: Mapped[float] = mapped_column(Float, default=0)
+    reps: Mapped[int] = mapped_column(Integer, default=0)  # consecutive successful reviews
+    lapses: Mapped[int] = mapped_column(Integer, default=0)
+    last_verdict: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class RefreshToken(Base):

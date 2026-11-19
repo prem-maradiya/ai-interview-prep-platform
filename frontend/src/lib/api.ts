@@ -33,10 +33,11 @@ function tryRefresh(): Promise<boolean> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token }),
     });
-    if (!r.ok) {
-      tokens.clear();
+    if (r.status === 401) {
+      tokens.clear(); // token revoked/expired: the session is over
       return false;
     }
+    if (!r.ok) throw new ApiError(r.status, "Server unavailable, please retry"); // keep tokens on 5xx/429
     tokens.set(await r.json());
     return true;
   })().finally(() => {
@@ -122,13 +123,48 @@ export type Problem = ProblemSummary & { description: string; starter_code: Reco
 export type TestResult = { index: number; status: string; passed: boolean; hidden: boolean; time_ms: number; input?: string; expected?: string; stdout?: string; stderr?: string };
 export type RunResult = { verdict: string; passed: number; total: number; runtime_ms: number; results: TestResult[] };
 export type Submission = RunResult & { id: string; problem_id: string; language: string; code: string; ai_review: string | null; created_at: string };
-export type Message = { seq: number; sender: "interviewer" | "candidate"; content: string; created_at: string };
+export type Message = {
+  seq: number; sender: "interviewer" | "candidate"; content: string; created_at: string;
+  input_mode?: "text" | "voice"; code?: string | null; code_language?: string | null;
+};
+export type Delivery = {
+  voice_answers: number; avg_words_per_answer: number; filler_words: number;
+  fillers_per_100_words: number; top_fillers: string[]; notes: string[];
+};
+export type DocumentSummary = { id: string; kind: "resume" | "job_description"; title: string; chars: number; preview: string; created_at: string };
+export type FitReport = {
+  match_score: number; summary: string; matched_skills: string[]; missing_skills: string[];
+  resume_suggestions: string[]; likely_questions: string[];
+};
+export type PlanItem = { problem_id: string; title: string; difficulty: string; reason: string; overdue_days?: number };
+export type Plan = {
+  streak_days: number; practiced_today: boolean; due_reviews: PlanItem[]; due_count: number; new_problems: PlanItem[];
+  suggested_interview: { kind: string; focus: string; reason: string }; learned_count: number; next_review_at: string | null;
+};
+
+/** Multipart upload (no JSON content-type, so the browser sets the boundary). */
+export async function apiUpload<T = any>(path: string, form: FormData): Promise<T> {
+  const send = () => fetch(`/api${path}`, { method: "POST", headers: { Authorization: `Bearer ${tokens.get() ?? ""}` }, body: form });
+  let r = await send();
+  if (r.status === 401 && (await tryRefresh())) r = await send();
+  if (!r.ok) {
+    let msg = r.statusText;
+    try {
+      const j = await r.json();
+      msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch {}
+    throw new ApiError(r.status, msg);
+  }
+  return r.json();
+}
 export type Scorecard = {
   overall_score: number; hire_signal: string; summary: string;
   dimensions: { name: string; score: number; comment: string }[];
   strengths: string[]; improvements: string[]; suggested_topics: string[];
+  delivery?: Delivery;
 };
 export type Interview = {
   id: string; kind: string; role_title: string; level: string; focus: string; status: string;
   overall_score: number | null; scorecard: Scorecard | null; created_at: string; messages: Message[];
+  has_resume?: boolean; has_job_description?: boolean; code?: string | null; code_language?: string | null;
 };
