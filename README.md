@@ -6,6 +6,20 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 
 **Stack:** FastAPI · SQLAlchemy 2 (async) + Alembic · PostgreSQL · Redis + arq · JWT · Docker SDK · Claude API (Anthropic SDK) · React + Vite + Monaco · GitHub Actions
 
+[![CI](https://github.com/prem-maradiya/ai-interview-prep-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/prem-maradiya/ai-interview-prep-platform/actions/workflows/ci.yml)
+
+## Screenshots
+
+| Candidate dashboard: daily plan, streak, progress | Code judge running in a Docker sandbox |
+|---|---|
+| ![Dashboard with today's plan](docs/screenshots/dashboard.png) | ![Code editor with test results](docs/screenshots/code-judge.png) |
+| **Technical mock interview with shared code editor** | **Resume ↔ job description fit report** |
+| ![Interview chat beside a code editor](docs/screenshots/interview-with-code.png) | ![Fit report with matched and missing skills](docs/screenshots/resume-fit-report.png) |
+| **Mentor view: assignment progress** | **Mentor view: integrity signals on a submission** |
+| ![Assignment progress per candidate](docs/screenshots/assignment-progress.png) | ![Integrity signals: similarity, paste, tab switching](docs/screenshots/integrity-signals.png) |
+
+<sub>Screenshots use the built-in offline AI provider (`LLM_PROVIDER=mock`), so interviewer and report text is canned; with `LLM_PROVIDER=anthropic` it comes from Claude.</sub>
+
 ## Features
 
 | Area | What's built |
