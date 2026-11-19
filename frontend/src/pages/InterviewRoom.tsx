@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import Markdown from "react-markdown";
-import { api, type Interview, type Message, type Scorecard } from "../lib/api";
+import { api, apiStream, type Interview, type Message, type Scorecard } from "../lib/api";
 
 export default function InterviewRoom() {
   const { id } = useParams();
@@ -9,26 +9,45 @@ export default function InterviewRoom() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [streaming, setStreaming] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api<Interview>(`/interviews/${id}`).then(setIv);
   }, [id]);
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [iv?.messages.length, busy]);
+  // Block body on purpose: newer browsers make scrollIntoView() return a Promise, and React would
+  // try to call any non-undefined return value as the effect's cleanup function and crash.
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [iv?.messages.length, busy, streaming]);
 
   async function send() {
     if (!iv || !draft.trim()) return;
     setBusy("send");
     setError("");
+    setStreaming("");
     const content = draft;
     setDraft("");
+    let sent = false;
     try {
-      const msgs = await api<Message[]>(`/interviews/${id}/messages`, { body: { content } });
-      setIv({ ...iv, messages: [...iv.messages, ...msgs] });
+      await apiStream(`/interviews/${id}/messages/stream`, { content }, (event, data) => {
+        if (event === "candidate") {
+          sent = true;
+          setIv((cur) => (cur ? { ...cur, messages: [...cur.messages, data as Message] } : cur));
+        } else if (event === "delta") {
+          setStreaming((s) => (s ?? "") + data.text);
+        } else if (event === "done") {
+          setStreaming(null);
+          setIv((cur) => (cur ? { ...cur, messages: [...cur.messages, data as Message] } : cur));
+        } else if (event === "error") {
+          setError(data.detail);
+        }
+      });
     } catch (e: any) {
-      setDraft(content);
+      if (!sent) setDraft(content);
       setError(e.message);
     } finally {
+      setStreaming(null);
       setBusy("");
     }
   }
@@ -62,7 +81,16 @@ export default function InterviewRoom() {
             <Markdown>{m.content}</Markdown>
           </div>
         ))}
-        {busy === "send" && <div className="bubble interviewer muted">Interviewer is typing…</div>}
+        {busy === "send" && (
+          streaming ? (
+            <div className="bubble interviewer">
+              <div className="small muted">Interviewer</div>
+              <Markdown>{streaming}</Markdown>
+            </div>
+          ) : (
+            <div className="bubble interviewer muted">Interviewer is typing…</div>
+          )
+        )}
         <div ref={bottom} />
       </div>
       {error && <div className="error">{error}</div>}

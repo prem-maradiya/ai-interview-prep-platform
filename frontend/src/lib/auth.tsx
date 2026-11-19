@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, tokens, type Tokens, type User } from "./api";
+import { api, logout, tokens, type Tokens, type User } from "./api";
 
 type AuthCtx = {
   user: User | null;
@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = () => {
-    tokens.clear();
+    logout(); // revokes the refresh token server-side
     setUser(null);
   };
 

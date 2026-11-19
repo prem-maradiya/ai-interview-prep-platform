@@ -21,17 +21,76 @@ export class ApiError extends Error {
   }
 }
 
-async function tryRefresh(): Promise<boolean> {
-  const refresh_token = localStorage.getItem(REFRESH);
-  if (!refresh_token) return false;
-  const r = await fetch("/api/auth/refresh", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token }),
+// Refresh tokens rotate and re-use is treated as theft, so concurrent 401s must share ONE refresh call.
+let refreshing: Promise<boolean> | null = null;
+
+function tryRefresh(): Promise<boolean> {
+  refreshing ??= (async () => {
+    const refresh_token = localStorage.getItem(REFRESH);
+    if (!refresh_token) return false;
+    const r = await fetch("/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token }),
+    });
+    if (!r.ok) {
+      tokens.clear();
+      return false;
+    }
+    tokens.set(await r.json());
+    return true;
+  })().finally(() => {
+    refreshing = null;
   });
-  if (!r.ok) return false;
-  tokens.set(await r.json());
-  return true;
+  return refreshing;
+}
+
+export async function logout(): Promise<void> {
+  const refresh_token = localStorage.getItem(REFRESH);
+  tokens.clear();
+  if (refresh_token) {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token }),
+    }).catch(() => {});
+  }
+}
+
+/** POST that consumes a Server-Sent Events response, calling onEvent for each event. */
+export async function apiStream(path: string, body: unknown, onEvent: (event: string, data: any) => void, retry = true): Promise<void> {
+  const r = await fetch(`/api${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokens.get() ?? ""}` },
+    body: JSON.stringify(body),
+  });
+  if (r.status === 401 && retry && (await tryRefresh())) return apiStream(path, body, onEvent, false);
+  if (!r.ok || !r.body) {
+    let msg = r.statusText;
+    try {
+      msg = (await r.json()).detail ?? msg;
+    } catch {}
+    throw new ApiError(r.status, typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value;
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      let event = "message";
+      let data = "";
+      for (const line of raw.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data += line.slice(6);
+      }
+      onEvent(event, data ? JSON.parse(data) : null);
+    }
+  }
 }
 
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown } = {}, retry = true): Promise<T> {

@@ -95,6 +95,12 @@ class DockerSandbox(Sandbox):
             self._client = docker.from_env()
         return self._client
 
+    def check_runtime(self) -> None:
+        """Fail fast if a hardened runtime (e.g. gVisor's runsc) is configured but not installed."""
+        runtime = self.settings.sandbox_runtime
+        if runtime and runtime not in self._docker().info().get("Runtimes", {}):
+            raise SandboxError(f"Docker runtime '{runtime}' is not installed on this host")
+
     def _run_blocking(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
         import docker.errors
         import requests.exceptions
@@ -172,11 +178,48 @@ def grade(raw: list[RawResult], expected: list[str | None], hidden: list[bool], 
     }
 
 
+class QueueSandbox(Sandbox):
+    """Sends runs to the arq worker over Redis, so the API process never touches the Docker socket."""
+
+    def __init__(self, redis_url: str) -> None:
+        self.redis_url = redis_url
+        self.settings = get_settings()
+        self._pool = None
+
+    async def _get_pool(self):
+        if self._pool is None:
+            from arq import create_pool
+            from arq.connections import RedisSettings
+
+            self._pool = await create_pool(RedisSettings.from_dsn(self.redis_url))
+        return self._pool
+
+    async def execute(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
+        if language not in LANGUAGES:
+            raise SandboxError(f"Unsupported language: {language}")
+        try:
+            pool = await self._get_pool()
+            job = await pool.enqueue_job("run_code", language, code, inputs)
+            # Generous: covers queue wait plus the container's own wall-clock limit.
+            data = await job.result(timeout=self.settings.sandbox_total_timeout_s + 40, poll_delay=0.05)
+        except TimeoutError as e:
+            raise SandboxError("Code runner is busy, please try again") from e
+        except Exception as e:  # noqa: BLE001  (Redis down, worker crashed, job failed)
+            raise SandboxError(f"Code runner unavailable: {type(e).__name__}") from e
+        return [RawResult(**r) for r in data]
+
+
 _sandbox: Sandbox | None = None
 
 
 def get_sandbox() -> Sandbox:
     global _sandbox
     if _sandbox is None:
-        _sandbox = DockerSandbox()
+        s = get_settings()
+        if s.sandbox_backend == "queue":
+            if not s.redis_url:
+                raise SandboxError("SANDBOX_BACKEND=queue requires REDIS_URL")
+            _sandbox = QueueSandbox(s.redis_url)
+        else:
+            _sandbox = DockerSandbox()
     return _sandbox

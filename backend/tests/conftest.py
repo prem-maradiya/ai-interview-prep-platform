@@ -39,6 +39,9 @@ app.dependency_overrides[get_sandbox] = lambda: LocalPythonSandbox()
 
 @pytest_asyncio.fixture(autouse=True)
 async def fresh_db():
+    from app.services.ratelimit import get_limiter
+
+    get_limiter().reset()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)

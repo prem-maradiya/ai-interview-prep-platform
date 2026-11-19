@@ -8,7 +8,9 @@ Candidate-written text (answers, code) is untrusted: it is always sent in the us
 never interpolated into system prompts, and system prompts tell the model to ignore
 instructions found inside it.
 """
+import asyncio
 import random
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
@@ -94,6 +96,9 @@ def transcript_text(history: list[Turn]) -> str:
 
 class LLMProvider:
     async def interviewer_reply(self, ctx: InterviewContext, history: list[Turn]) -> str: ...
+
+    async def interviewer_reply_stream(self, ctx: InterviewContext, history: list[Turn]) -> AsyncIterator[str]:
+        yield await self.interviewer_reply(ctx, history)
     async def scorecard(self, ctx: InterviewContext, history: list[Turn]) -> Scorecard: ...
     async def code_review(self, problem: str, language: str, code: str, verdict: str) -> str: ...
     async def hint(self, problem: str, language: str, code: str, level: int) -> str: ...
@@ -133,6 +138,29 @@ class AnthropicProvider(LLMProvider):
         return self._text(response)
 
     async def interviewer_reply(self, ctx: InterviewContext, history: list[Turn]) -> str:
+        return await self._chat(interviewer_system(ctx), self._interview_messages(history), effort="low")
+
+    async def interviewer_reply_stream(self, ctx: InterviewContext, history: list[Turn]) -> AsyncIterator[str]:
+        try:
+            async with self.client.beta.messages.stream(
+                model=self.model,
+                max_tokens=4000,
+                system=interviewer_system(ctx),
+                messages=self._interview_messages(history),
+                output_config={"effort": "low"},
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+                final = await stream.get_final_message()
+        except self._anthropic.APIError as e:
+            raise LLMError(f"LLM request failed: {e}") from e
+        if final.stop_reason == "refusal":
+            raise LLMError("The model declined this request.")
+
+    @staticmethod
+    def _interview_messages(history: list[Turn]) -> list[dict]:
         # Interviewer = assistant, candidate = user. A synthetic kickoff opens the conversation.
         messages: list[dict] = [{"role": "user", "content": KICKOFF}]
         for t in history:
@@ -141,7 +169,7 @@ class AnthropicProvider(LLMProvider):
                 messages[-1]["content"] += "\n\n" + t.content
             else:
                 messages.append({"role": role, "content": t.content})
-        return await self._chat(interviewer_system(ctx), messages, effort="low")
+        return messages
 
     async def scorecard(self, ctx: InterviewContext, history: list[Turn]) -> Scorecard:
         try:
@@ -216,6 +244,12 @@ class MockProvider(LLMProvider):
         if asked >= len(qs):
             return "Thanks, that covers my questions. You can end the interview now to see your feedback."
         return f"Thanks for that. {qs[asked]}"
+
+    async def interviewer_reply_stream(self, ctx: InterviewContext, history: list[Turn]) -> AsyncIterator[str]:
+        words = (await self.interviewer_reply(ctx, history)).split(" ")
+        for i, w in enumerate(words):
+            await asyncio.sleep(0.02)
+            yield w if i == 0 else " " + w
 
     async def scorecard(self, ctx: InterviewContext, history: list[Turn]) -> Scorecard:
         answers = [t.content for t in history if t.sender == "candidate"]

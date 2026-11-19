@@ -1,3 +1,12 @@
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://prep:prep@db:5432/prep
+  REDIS_URL: redis://redis:6379
+  SANDBOX_BACKEND: queue
+  LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789}
+  SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-}
+
 services:
   db:
     image: postgres:16-alpine
@@ -12,26 +21,45 @@ services:
       interval: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+
   backend:
     build: ./backend
     env_file:
       - path: .env
         required: false
-    environment:
-      DATABASE_URL: postgresql+asyncpg://prep:prep@db:5432/prep
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789}
-    volumes:
-      # The API launches sibling sandbox containers through the host Docker daemon.
-      # Anything with this socket is root-equivalent on the host: in production, run
-      # sandboxes on a separate worker host and/or put a socket proxy in front of it.
-      - /var/run/docker.sock:/var/run/docker.sock
+    environment: *backend-env
+    # Apply migrations, then serve. Proxy headers are trusted because only nginx can reach this port.
+    command: >-
+      sh -c "alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "${API_PORT:-8010}:8000"
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    # Runs untrusted code. The only service with the Docker socket: in production, put it on
+    # separate hosts (ideally with SANDBOX_RUNTIME=runsc / gVisor) and scale it independently.
+    build: ./backend
+    command: arq app.worker.WorkerSettings
+    env_file:
+      - path: .env
+        required: false
+    environment: *backend-env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
@@ -39,6 +67,7 @@ services:
       - backend
     ports:
       - "${WEB_PORT:-3080}:80"
+    restart: unless-stopped
 
 volumes:
   pgdata:

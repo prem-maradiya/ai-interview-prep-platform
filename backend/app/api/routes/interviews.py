@@ -1,11 +1,14 @@
+import json
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser, get_scoped
 from app.db.models import Interview, InterviewMessage
+from app.db.session import SessionLocal
 from app.schemas import InterviewIn, InterviewOut, InterviewSummary, MessageIn, MessageOut
 from app.services import quota
 from app.services.llm import InterviewContext, LLMError, LLMProvider, Turn, get_llm
@@ -78,6 +81,51 @@ async def send_message(interview_id: str, body: MessageIn, user: CurrentUser, db
     iv.messages.append(reply)
     await db.commit()
     return [answer, reply]
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/{interview_id}/messages/stream")
+async def send_message_stream(interview_id: str, body: MessageIn, user: CurrentUser, db: DB, llm: LLMDep):
+    """Same as /messages, but streams the interviewer's reply as Server-Sent Events.
+
+    Events: `candidate` (saved answer), `delta` ({text}) repeated, then `done` (saved reply) or `error`.
+    """
+    iv = await _own_interview(db, interview_id, user)
+    if iv.status != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Interview already completed")
+    if sum(m.sender == "candidate" for m in iv.messages) >= MAX_CANDIDATE_TURNS:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Turn limit reached - end the interview to get feedback")
+    await quota.consume(db, user, "llm")
+    seq = len(iv.messages)
+    answer = InterviewMessage(seq=seq, sender="candidate", content=body.content)
+    iv.messages.append(answer)
+    await db.commit()
+    # Snapshot everything the stream needs: the request's DB session is not used after this point.
+    ctx, history, iv_id = _ctx(iv), _history(iv), iv.id
+    answer_out = MessageOut.model_validate(answer).model_dump(mode="json")
+
+    async def events():
+        yield _sse("candidate", answer_out)
+        parts: list[str] = []
+        try:
+            async for chunk in llm.interviewer_reply_stream(ctx, history):
+                parts.append(chunk)
+                yield _sse("delta", {"text": chunk})
+        except LLMError as e:
+            yield _sse("error", {"detail": str(e)})
+            return
+        async with SessionLocal() as session:
+            reply = InterviewMessage(interview_id=iv_id, seq=seq + 1, sender="interviewer", content="".join(parts).strip())
+            session.add(reply)
+            await session.commit()
+            await session.refresh(reply)
+            yield _sse("done", MessageOut.model_validate(reply).model_dump(mode="json"))
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/{interview_id}/end", response_model=InterviewOut)

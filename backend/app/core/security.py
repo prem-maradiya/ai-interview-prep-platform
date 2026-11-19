@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -17,6 +18,10 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+# Used to keep login timing constant when the account doesn't exist (avoids user enumeration).
+DUMMY_HASH = hash_password("timing-equalizer-not-a-real-password")
+
+
 def _encode(payload: dict, expires: timedelta) -> str:
     s = get_settings()
     now = datetime.now(timezone.utc)
@@ -24,14 +29,17 @@ def _encode(payload: dict, expires: timedelta) -> str:
     return jwt.encode(body, s.jwt_secret, algorithm=s.jwt_algorithm)
 
 
-def create_token_pair(user_id: str, tenant_id: str, role: str) -> dict:
-    s = get_settings()
-    claims = {"sub": user_id, "tid": tenant_id, "role": role}
-    return {
-        "access_token": _encode({**claims, "type": "access"}, timedelta(minutes=s.access_token_minutes)),
-        "refresh_token": _encode({**claims, "type": "refresh"}, timedelta(days=s.refresh_token_days)),
-        "token_type": "bearer",
-    }
+def create_access_token(user_id: str, tenant_id: str, role: str) -> str:
+    claims = {"sub": user_id, "tid": tenant_id, "role": role, "type": "access"}
+    return _encode(claims, timedelta(minutes=get_settings().access_token_minutes))
+
+
+def create_refresh_token(user_id: str, tenant_id: str) -> tuple[str, str, datetime]:
+    """Returns (token, jti, expires_at). The jti is stored server-side so the token can be revoked."""
+    jti = str(uuid.uuid4())
+    ttl = timedelta(days=get_settings().refresh_token_days)
+    token = _encode({"sub": user_id, "tid": tenant_id, "type": "refresh", "jti": jti}, ttl)
+    return token, jti, datetime.now(timezone.utc) + ttl
 
 
 def decode_token(token: str, expected_type: str) -> dict:

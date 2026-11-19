@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.api.deps import DB, AdminUser, CurrentUser, get_scoped
+from app.api.routes.auth import revoke_all_for_user
 from app.db.models import Invite, Role, User
 from app.schemas import InviteIn, InviteOut, MemberOut, MemberUpdateIn, TenantOut
 from app.services.quota import usage_summary
@@ -35,6 +36,8 @@ async def update_member(member_id: str, body: MemberUpdateIn, user: AdminUser, d
         member.role = body.role
     if body.is_active is not None:
         member.is_active = body.is_active
+        if not body.is_active:
+            await revoke_all_for_user(db, member.id)  # sign them out everywhere
     await db.commit()
     return member
 

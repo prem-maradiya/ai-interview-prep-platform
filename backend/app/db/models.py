@@ -152,6 +152,22 @@ class InterviewMessage(Base):
     interview: Mapped[Interview] = relationship(back_populates="messages")
 
 
+class RefreshToken(Base):
+    """Server-side record of each refresh token (by JWT `jti`).
+
+    Tokens rotate on every refresh. All tokens descending from one login share a `family_id`;
+    presenting an already-rotated token means it was stolen or replayed, so the whole family is revoked.
+    """
+
+    __tablename__ = "refresh_tokens"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # = jti
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    family_id: Mapped[str] = mapped_column(String(36), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class UsageEvent(Base):
     """Metering for per-tenant quotas (LLM calls, sandbox runs)."""
 
