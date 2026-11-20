@@ -68,7 +68,7 @@ async def test_unsubscribe_link_turns_everything_off(client, reg):
     owner, (alice, _), probs = await setup_org(client, reg)
     await client.post("/api/assignments", headers=owner, json={
         "title": "W1", "due_at": due(5), "problem_ids": [probs["Two Sum"]]})
-    m = (await outbox())[0]
+    m = next(m for m in await outbox() if m.to == "cand0@acme.io")  # Alice and Bob are emailed concurrently
     token = m.headers["List-Unsubscribe"].split("token=")[1].rstrip(">")
     assert (await client.post("/api/notifications/unsubscribe", json={"token": "nope"})).status_code == 400
     r = await client.post(f"/api/notifications/unsubscribe?token={token}")  # RFC 8058 one-click form
