@@ -122,12 +122,19 @@ export default function ProblemSolve() {
       <section className="card prose">
         <h2>{problem.title} <span className={`diff ${problem.difficulty}`}>{problem.difficulty}</span></h2>
         <Markdown>{problem.description}</Markdown>
+        {problem.signature && (
+          <div className="signature">
+            <div className="small muted">Implement this function (the judge calls it and checks the return value):</div>
+            <code>{signatureText(problem.signature)}</code>
+            {problem.signature.compare === "unordered" && <div className="small muted">The returned list may be in any order.</div>}
+          </div>
+        )}
         <h4>Sample tests</h4>
         {problem.sample_tests.map((t, i) => (
           <div key={t.id} className="sample">
             <div className="small muted">Example {i + 1}</div>
-            <pre>Input:{"\n"}{t.input || "(empty)"}</pre>
-            <pre>Output:{"\n"}{t.expected_output}</pre>
+            <pre>Input:{"\n"}{problem.signature ? namedArgs(problem.signature, t.input) : t.input || "(empty)"}</pre>
+            <pre>{problem.signature ? "Returns" : "Output"}:{"\n"}{t.expected_output}</pre>
           </div>
         ))}
         <p className="muted small">+ {problem.hidden_test_count} hidden tests on submit</p>
@@ -169,9 +176,15 @@ export default function ProblemSolve() {
             options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false }} />
         </div>
         <label className="small"><input type="checkbox" checked={useCustom} onChange={(e) => setUseCustom(e.target.checked)} /> Run with custom input</label>
-        {useCustom && <textarea rows={3} value={customInput} onChange={(e) => setCustomInput(e.target.value)} placeholder="stdin" />}
+        {useCustom && (
+          <textarea rows={Math.max(3, problem.signature?.params.length ?? 0)} value={customInput}
+            onChange={(e) => setCustomInput(e.target.value)}
+            placeholder={problem.signature
+              ? problem.signature.params.map((p) => `${p.name} (${p.type}) as JSON, e.g. ${exampleFor(p.type)}`).join("\n")
+              : "stdin"} />
+        )}
         {error && <div className="error">{error}</div>}
-        {result && <Results r={result} />}
+        {result && <Results r={result} fn={!!problem.signature} />}
         {submission && (
           <div className="card">
             {submission.ai_review ? (
@@ -186,23 +199,48 @@ export default function ProblemSolve() {
   );
 }
 
-function Results({ r }: { r: RunResult }) {
+export function signatureText(s: { function: string; params: { name: string; type: string }[]; returns: string }) {
+  return `${s.function}(${s.params.map((p) => `${p.name}: ${p.type}`).join(", ")}) -> ${s.returns}`;
+}
+
+function namedArgs(s: { params: { name: string }[] }, input: string) {
+  const lines = input.split("\n").filter((l) => l.trim());
+  return lines.length === s.params.length ? s.params.map((p, i) => `${p.name} = ${lines[i]}`).join("\n") : input;
+}
+
+function exampleFor(type: string) {
+  const base = type.replace(/\[\]/g, "");
+  const one = { int: "3", long: "3", float: "1.5", bool: "true", string: '"abc"' }[base] ?? "0";
+  const depth = (type.match(/\[\]/g) || []).length;
+  return depth === 0 ? one : depth === 1 ? `[${one},${one}]` : `[[${one}],[${one}]]`;
+}
+
+export function Results({ r, fn = false }: { r: RunResult; fn?: boolean }) {
   return (
     <div className="card">
       <div className="row between">
         <b className={`verdict ${r.verdict}`}>{r.verdict.replace(/_/g, " ")}</b>
         <span className="muted small">{r.passed}/{r.total} passed · max {r.runtime_ms} ms CPU</span>
       </div>
+      {r.verdict === "too_slow" && (
+        <div className="small note-slow">
+          Your answers are correct, but the solution ran out of time on a large input. Look for a more efficient
+          algorithm (for example O(n) or O(n log n) instead of O(n²)).
+        </div>
+      )}
       {r.results.map((t) => (
         <details key={t.index} className="test" open={!t.passed && !t.hidden}>
           <summary>
-            {t.passed ? "✅" : "❌"} Test {t.index + 1} {t.hidden && <span className="muted">(hidden)</span>} — {t.status.replace(/_/g, " ")} · {t.time_ms} ms CPU
+            {t.passed ? "✅" : "❌"} Test {t.index + 1} {t.hidden && <span className="muted">(hidden)</span>}
+            {t.large && <span className="tag">large input</span>} — {t.status.replace(/_/g, " ")} · {t.time_ms} ms CPU
           </summary>
+          {t.hidden && t.large && t.input && <div className="small muted">{t.input}</div>}
           {!t.hidden && (
             <div className="grid2 small">
               <pre>Input:{"\n"}{t.input}</pre>
               {t.expected != null && <pre>Expected:{"\n"}{t.expected}</pre>}
-              <pre>Output:{"\n"}{t.stdout}</pre>
+              <pre>{fn ? "Returned" : "Output"}:{"\n"}{t.stdout}</pre>
+              {t.printed && <pre>Printed:{"\n"}{t.printed}</pre>}
               {t.stderr && <pre className="stderr">{t.stderr}</pre>}
             </div>
           )}

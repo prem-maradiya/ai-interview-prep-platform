@@ -17,6 +17,8 @@ import ProblemListPage from "./pages/ProblemLists";
 import NotificationBell from "./components/NotificationBell";
 import OAuthComplete from "./pages/OAuthComplete";
 import Account from "./pages/Account";
+import Peer from "./pages/Peer";
+import PeerRoom from "./pages/PeerRoom";
 import { ForgotPassword, ResetPassword, Unsubscribe } from "./pages/PublicPages";
 
 // Opened from emails; they work whether or not someone is signed in.
@@ -44,6 +46,7 @@ export default function App() {
           <NavLink to="/" end>Dashboard</NavLink>
           <NavLink to="/problems">Problems</NavLink>
           <NavLink to="/interviews">Mock interviews</NavLink>
+          <NavLink to="/peer">Peer practice</NavLink>
           <NavLink to="/documents">Resume &amp; jobs</NavLink>
           <NavLink to="/assignments">Assignments</NavLink>
           <NavLink to="/achievements">Achievements</NavLink>
@@ -62,6 +65,8 @@ export default function App() {
           <Route path="/problems/:id" element={<ProblemSolve />} />
           <Route path="/interviews" element={<Interviews />} />
           <Route path="/interviews/:id" element={<InterviewRoom />} />
+          <Route path="/peer" element={<Peer />} />
+          <Route path="/peer/:id" element={<PeerRoom />} />
           <Route path="/documents" element={<Documents />} />
           <Route path="/assignments" element={<Assignments />} />
           <Route path="/achievements" element={<AchievementsPage />} />

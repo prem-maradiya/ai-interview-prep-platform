@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiDownload, type IntegrityFlag } from "../lib/api";
 import { isAdmin, useAuth } from "../lib/auth";
+import AuditLog from "../components/AuditLog";
 
 type IntegrityItem = {
   submission_id: string; user_id: string; full_name: string; problem_title: string; verdict: string;
@@ -156,6 +157,7 @@ export default function OrgAdmin() {
               </tbody>
             </table>
           </div>
+          <AuditLog />
         </>
       )}
     </div>

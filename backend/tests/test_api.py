@@ -123,6 +123,27 @@ REFERENCE_SOLUTIONS = {
         "for i in range(1,len(a)+1):\n    p=d[:];d[0]=i\n    for j in range(1,len(b)+1):\n"
         "        d[j]=p[j-1] if a[i-1]==b[j-1] else 1+min(p[j-1],p[j],d[j-1])\nprint(d[-1])"
     ),
+    # Function-style problems: just the function; the judge supplies arguments and reads the return value.
+    "Contains Duplicate": "def containsDuplicate(nums):\n    return len(set(nums)) != len(nums)",
+    "Best Time to Buy and Sell Stock": (
+        "def maxProfit(prices):\n    best, low = 0, prices[0]\n"
+        "    for p in prices:\n        low = min(low, p); best = max(best, p - low)\n    return best"
+    ),
+    "Valid Palindrome": "def isPalindrome(s):\n    t = [c.lower() for c in s if c.isalnum()]\n    return t == t[::-1]",
+    "Longest Common Prefix": "import os\ndef longestCommonPrefix(strs):\n    return os.path.commonprefix(strs)",
+    "Product of Array Except Self": (
+        "def productExceptSelf(nums):\n    n = len(nums); out = [1] * n; p = 1\n"
+        "    for i in range(n):\n        out[i] = p; p *= nums[i]\n    p = 1\n"
+        "    for i in range(n - 1, -1, -1):\n        out[i] *= p; p *= nums[i]\n    return out"
+    ),
+    "Rotate Image": "def rotate(matrix):\n    return [list(r) for r in zip(*matrix[::-1])]",
+    "Top K Frequent Elements": (
+        "from collections import Counter\ndef topKFrequent(nums, k):\n    return [x for x, _ in Counter(nums).most_common(k)]"
+    ),
+    "Median of Two Sorted Arrays": (
+        "def findMedianSortedArrays(nums1, nums2):\n    a = sorted(nums1 + nums2); n = len(a)\n"
+        "    return a[n // 2] if n % 2 else (a[n // 2 - 1] + a[n // 2]) / 2"
+    ),
 }
 
 

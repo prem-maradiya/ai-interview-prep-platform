@@ -3,6 +3,7 @@ from datetime import timezone
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete, or_, select
 
+from app.services import audit
 from app.api.deps import DB, ROLE_RANK, CurrentUser, MentorUser, get_scoped
 from app.db.models import Assignment, AssignmentMember, Notification, Problem, Role, User
 from app.schemas import AssignmentIn
@@ -62,6 +63,8 @@ async def create_assignment(body: AssignmentIn, user: MentorUser, db: DB):
     targets = await assignees(db, a)
     await notify(db, [u.id for u in targets], user.tenant_id, kind="assignment", title=f"New assignment: {a.title}",
                  body=f"From {user.full_name}, due {due.strftime('%b %d')}.", link=f"/assignments/{a.id}")
+    audit.record(db, user, "assignment.created", target_type="assignment", target_id=a.id, target_label=a.title,
+                 details={"assignees": "all candidates" if a.assign_all else len(member_ids), "due": due.date().isoformat()})
     await db.commit()
     await db.refresh(a)
     return _base(a, await _problem_titles(db, a.problem_ids))
@@ -112,6 +115,7 @@ async def delete_assignment(assignment_id: str, user: MentorUser, db: DB):
     # Remove its notifications too, so nobody is left with links to a deleted assignment.
     await db.execute(delete(Notification).where(Notification.tenant_id == user.tenant_id,
                                                 Notification.link == f"/assignments/{a.id}"))
+    audit.record(db, user, "assignment.deleted", target_type="assignment", target_id=a.id, target_label=a.title)
     await db.delete(a)
     await db.commit()
 

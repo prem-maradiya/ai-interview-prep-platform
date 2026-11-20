@@ -86,13 +86,16 @@ def enabled_languages() -> list[str]:
 def image_tag(language: str) -> str:
     """Content-addressed tag: changing the Dockerfile or harness produces a new image automatically."""
     digest = hashlib.sha256()
-    for name in (f"{language}.Dockerfile", "harness.py"):
+    for name in (f"{language}.Dockerfile", "harness.py", "testdata.py"):
         digest.update((IMAGES_DIR / name).read_bytes().replace(b"\r\n", b"\n"))
     return f"prepforge-sandbox-{language}:{digest.hexdigest()[:12]}"
 
 
 class Sandbox:
-    async def execute(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
+    async def execute(self, language: str, code: str, inputs: list[str],
+                      extra_files: dict[str, str] | None = None, args: list[str] | None = None) -> list[RawResult]:
+        """Run `code` once per input. `extra_files` are written next to it (e.g. a generated driver);
+        `args` (parameter types) marks function-style inputs, converted inside the sandbox."""
         raise NotImplementedError
 
 
@@ -318,11 +321,13 @@ class DockerSandbox(Sandbox):
             labels={LABEL: "run", "prepforge.language": language},
         )
 
-    def _run_blocking(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
+    def _run_blocking(self, language: str, code: str, inputs: list[str],
+                      extra_files: dict[str, str] | None = None, args: list[str] | None = None) -> list[RawResult]:
         tag = self.ensure_image(language)
         limits = self._limits(LANGUAGES[language], len(inputs))
         payload = base64.b64encode(json.dumps({
             "lang": language, "code": code, "tests": inputs, "output_limit": OUTPUT_LIMIT,
+            "extra_files": extra_files or {}, "args": args,
             **{k: v for k, v in limits.items() if k != "container_timeout"},
         }).encode()).decode()
         container = self.pool.take(language, tag) if self.pool else None
@@ -384,11 +389,12 @@ class DockerSandbox(Sandbox):
             return [RawResult("memory", "", logs[-2000:] or "Process killed (memory limit?)", 0) for _ in inputs]
         return [RawResult(**r) for r in json.loads(logs[idx + len(RESULT_MARKER):].strip().splitlines()[0])]
 
-    async def execute(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
+    async def execute(self, language: str, code: str, inputs: list[str],
+                      extra_files: dict[str, str] | None = None, args: list[str] | None = None) -> list[RawResult]:
         if language not in enabled_languages():
             raise SandboxError(f"Unsupported language: {language}")
         async with self._sem:
-            return await anyio.to_thread.run_sync(self._run_blocking, language, code, inputs)
+            return await anyio.to_thread.run_sync(self._run_blocking, language, code, inputs, extra_files, args)
 
 
 def _normalize(text: str) -> str:
@@ -396,30 +402,68 @@ def _normalize(text: str) -> str:
 
 
 STATUS_VERDICT = {"timeout": "time_limit_exceeded", "memory": "memory_limit_exceeded",
-                  "compile_error": "compile_error", "runtime_error": "runtime_error"}
+                  "compile_error": "compile_error", "runtime_error": "runtime_error",
+                  "invalid_input": "invalid_input"}
 
 
-def grade(raw: list[RawResult], expected: list[str | None], hidden: list[bool], inputs: list[str]) -> dict:
-    """Compare outputs with expected values and compute a verdict. Hidden test details are withheld."""
+def grade(raw: list[RawResult], expected: list[str | None], hidden: list[bool], inputs: list[str],
+          signature=None) -> dict:
+    """Compare outputs with expected values and compute a verdict. Hidden test details are withheld.
+
+    `signature` (app.services.functions.Signature) marks a function-style problem: the returned
+    JSON is compared instead of stdout. Generated (large) inputs are complexity checks: if those are
+    the only failures and they ran out of time, the verdict is "too_slow" - correct, but not fast enough.
+    """
+    from app.services import functions
+
     results, passed, verdict = [], 0, "accepted"
+    large_timeouts, other_failures = 0, 0
     for i, (r, exp, hid, inp) in enumerate(zip(raw, expected, hidden, inputs)):
+        large = functions.testdata.is_generated(inp)
+        printed, shown = r.stdout, r.stdout
+        returned = None
+        if signature is not None:
+            printed, returned = functions.split_output(r.stdout)
+            shown = returned if returned is not None else ""
         if r.status != "ok":
             status = STATUS_VERDICT.get(r.status, "runtime_error")
+        elif signature is not None and returned is None:
+            status = "runtime_error"  # e.g. the program exited before the function returned
         elif exp is None:
             status = "ran"
+        elif signature is not None:
+            status = "passed" if functions.results_match(signature, returned, exp) else "wrong_answer"
         else:
             status = "passed" if _normalize(r.stdout) == _normalize(exp) else "wrong_answer"
         ok = status in ("passed", "ran")
         passed += ok
-        if not ok and verdict == "accepted":
-            verdict = status
+        if not ok:
+            if large and status == "time_limit_exceeded":
+                large_timeouts += 1
+            else:
+                other_failures += 1
+                if verdict == "accepted":
+                    verdict = status
+        if large:
+            shown_input = functions.describe_generated(inp)
+        elif signature is not None:
+            shown_input = functions.format_args(signature, inp)
+        else:
+            shown_input = inp
         # Compiler output is about the candidate's own code, so it's shown even for hidden tests.
-        show_stderr = not hid or status == "compile_error"
-        results.append({
-            "index": i, "status": status, "passed": ok, "hidden": hid, "time_ms": r.time_ms,
-            "input": None if hid else inp, "expected": None if hid else exp,
-            "stdout": None if hid else r.stdout[:4000], "stderr": r.stderr[-4000:] if show_stderr else None,
-        })
+        show_stderr = not hid or status in ("compile_error", "invalid_input")
+        entry = {
+            "index": i, "status": status, "passed": ok, "hidden": hid, "time_ms": r.time_ms, "large": large,
+            "input": None if hid and not large else shown_input, "expected": None if hid else exp,
+            "stdout": None if hid else shown[:4000], "stderr": r.stderr[-4000:] if show_stderr else None,
+        }
+        if signature is not None and not hid and printed.strip():
+            entry["printed"] = printed[:4000]
+        results.append(entry)
+    if large_timeouts and not other_failures:
+        verdict = "too_slow"
+    elif large_timeouts and verdict == "accepted":
+        verdict = "time_limit_exceeded"
     return {
         "verdict": verdict, "passed": passed, "total": len(raw),
         "runtime_ms": max((r.time_ms for r in raw), default=0), "results": results,
@@ -442,7 +486,8 @@ class QueueSandbox(Sandbox):
             self._pool = await create_pool(RedisSettings.from_dsn(self.redis_url))
         return self._pool
 
-    async def execute(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
+    async def execute(self, language: str, code: str, inputs: list[str],
+                      extra_files: dict[str, str] | None = None, args: list[str] | None = None) -> list[RawResult]:
         if language not in enabled_languages():
             raise SandboxError(f"Unsupported language: {language}")
         s = self.settings
@@ -450,7 +495,7 @@ class QueueSandbox(Sandbox):
         timeout = s.sandbox_compile_wall_s + len(inputs) * max(s.sandbox_wall_limit_s, s.sandbox_cpu_limit_s * 6) + 60
         try:
             pool = await self._get_pool()
-            job = await pool.enqueue_job("run_code", language, code, inputs)
+            job = await pool.enqueue_job("run_code", language, code, inputs, extra_files, args)
             data = await job.result(timeout=timeout, poll_delay=0.05)
         except TimeoutError as e:
             raise SandboxError("Code runner is busy, please try again") from e

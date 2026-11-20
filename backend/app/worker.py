@@ -19,8 +19,9 @@ log = logging.getLogger("prepforge.worker")
 setup_logging()  # arq only configures its own logger; show ours in `docker compose logs`
 
 
-async def run_code(ctx: dict, language: str, code: str, inputs: list[str]) -> list[dict]:
-    raw = await ctx["sandbox"].execute(language, code, inputs)
+async def run_code(ctx: dict, language: str, code: str, inputs: list[str],
+                   extra_files: dict[str, str] | None = None, args: list[str] | None = None) -> list[dict]:
+    raw = await ctx["sandbox"].execute(language, code, inputs, extra_files, args)
     return [asdict(r) for r in raw]
 
 

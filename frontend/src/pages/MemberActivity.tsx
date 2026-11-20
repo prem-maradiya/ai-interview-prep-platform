@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type IntegrityFlag } from "../lib/api";
+import { PeerHistory, type PeerSummary } from "./Peer";
 
 type Activity = {
   member: { id: string; full_name: string; email: string; role: string };
@@ -13,8 +14,10 @@ export default function MemberActivity() {
   const { id } = useParams();
   const [a, setA] = useState<Activity | null>(null);
   const [error, setError] = useState("");
+  const [peer, setPeer] = useState<PeerSummary[]>([]);
   useEffect(() => {
     api<Activity>(`/org/members/${id}/activity`).then(setA).catch((e) => setError(e.message));
+    api<{ mine: PeerSummary[] }>(`/peer?user_id=${id}`).then((r) => setPeer(r.mine)).catch(() => {});
   }, [id]);
   if (error) return <div className="error">{error}</div>;
   if (!a) return <div className="muted">Loading…</div>;
@@ -23,6 +26,12 @@ export default function MemberActivity() {
     <div className="stack">
       <h2>{a.member.full_name} <span className="pill">{a.member.role}</span></h2>
       <div className="muted">{a.member.email}</div>
+      {peer.length > 0 && (
+        <div className="card stack">
+          <h3>Peer interviews</h3>
+          <PeerHistory items={peer} />
+        </div>
+      )}
       <div className="grid2">
         <div className="card">
           <h3>Interviews</h3>

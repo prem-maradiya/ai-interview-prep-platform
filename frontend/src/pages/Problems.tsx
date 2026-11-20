@@ -67,7 +67,10 @@ export default function Problems() {
                 {shown.map((p) => (
                   <tr key={p.id}>
                     <td>{p.solved ? "✅" : ""}</td>
-                    <td><Link to={`/problems/${p.id}`}>{p.title}</Link></td>
+                    <td>
+                      <Link to={`/problems/${p.id}`}>{p.title}</Link>
+                      {p.style === "function" && <span className="tag fn-tag" title="Write a function; the judge calls it">ƒ function</span>}
+                    </td>
                     <td><span className={`diff ${p.difficulty}`}>{p.difficulty}</span></td>
                     <td>{p.tags.map((t) => <span key={t} className="tag">{t}</span>)}</td>
                     <td className="small muted">{p.companies.join(", ")}</td>

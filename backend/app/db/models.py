@@ -105,6 +105,8 @@ class Problem(Base):
     tags: Mapped[list] = mapped_column(JSON, default=list)
     companies: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")  # where it's been reported
     starter_code: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Function-style problems: {function, params: [{name, type}], returns, compare}. NULL = stdin/stdout.
+    signature: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -309,6 +311,76 @@ class ProblemList(Base):
     problem_titles: Mapped[list] = mapped_column(JSON, default=list)  # for global lists (ids differ per DB)
     problem_ids: Mapped[list] = mapped_column(JSON, default=list)  # for org lists
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AuditEvent(Base):
+    """Administrative / security action in an organization (see app.services.audit)."""
+
+    __tablename__ = "audit_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # no FK: the log outlives accounts
+    actor_name: Mapped[str] = mapped_column(String(120), default="")
+    actor_email: Mapped[str] = mapped_column(String(255), default="")
+    action: Mapped[str] = mapped_column(String(40), index=True)
+    target_type: Mapped[str] = mapped_column(String(30), default="")
+    target_id: Mapped[str] = mapped_column(String(36), default="")
+    target_label: Mapped[str] = mapped_column(String(200), default="")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class PeerSession(Base):
+    """A live mock interview between two members: one interviews, the other solves, then they swap."""
+
+    __tablename__ = "peer_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    host_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    guest_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    invited_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # set = only this member may join
+    status: Mapped[str] = mapped_column(String(12), default="open", index=True)  # open | active | completed | cancelled
+    host_first: Mapped[bool] = mapped_column(Boolean, default=True)  # host is the candidate in round 1
+    round: Mapped[int] = mapped_column(Integer, default=1)  # 1 or 2 (roles swap for round 2)
+    problem_ids: Mapped[list] = mapped_column(JSON, default=list)  # one problem per round
+    # Per round ("1"/"2"): {"language", "code"} and the interviewer's private notes.
+    code: Mapped[dict] = mapped_column(JSON, default=dict)
+    notes: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    host: Mapped[User] = relationship(foreign_keys=[host_id], lazy="joined")
+    guest: Mapped[User | None] = relationship(foreign_keys=[guest_id], lazy="joined")
+
+
+class PeerMessage(Base):
+    __tablename__ = "peer_messages"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(ForeignKey("peer_sessions.id", ondelete="CASCADE"), index=True)
+    sender_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    round: Mapped[int] = mapped_column(Integer, default=1)
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class PeerFeedback(Base):
+    """The interviewer's rating of the candidate for one round."""
+
+    __tablename__ = "peer_feedback"
+    __table_args__ = (UniqueConstraint("session_id", "round"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(ForeignKey("peer_sessions.id", ondelete="CASCADE"), index=True)
+    round: Mapped[int] = mapped_column(Integer)
+    from_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    to_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    problem_solving: Mapped[int] = mapped_column(Integer)
+    communication: Mapped[int] = mapped_column(Integer)
+    code_quality: Mapped[int] = mapped_column(Integer)
+    hire: Mapped[str] = mapped_column(String(12))  # strong_no | no | yes | strong_yes
+    comments: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

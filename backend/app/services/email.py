@@ -36,7 +36,8 @@ EMAIL_KINDS: dict[str, dict] = {
     "due_soon": {"label": "Assignment due within 24 hours", "default": True},
     "comment": {"label": "Mentor feedback on your work", "default": True},
     "badge": {"label": "Badges earned", "default": False},
-    "digest": {"label": "Weekly progress digest", "default": True},
+    "digest": {"label": "Weekly progress digest (mentors: includes a cohort summary)", "default": True},
+    "peer": {"label": "Peer interview invitations", "default": True},
 }
 
 

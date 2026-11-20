@@ -109,7 +109,7 @@ async def test_badges_and_xp(client, reg):
 async def test_global_and_org_lists(client, reg):
     owner, (alice, _), probs = await setup_org(client, reg)
     lists = (await client.get("/api/lists", headers=alice["h"])).json()
-    assert {l["slug"] for l in lists} == {"interview-warmup", "arrays-hashing", "big-tech-frequent"}
+    assert {l["slug"] for l in lists} == {"interview-warmup", "arrays-hashing", "function-classics", "big-tech-frequent"}
     warm = next(l for l in lists if l["slug"] == "interview-warmup")
     assert warm["total"] == 6 and warm["solved"] == 0
 

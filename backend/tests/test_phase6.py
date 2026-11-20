@@ -33,7 +33,7 @@ async def test_assignment_email_respects_preferences(client, reg):
     prefs = (await client.get("/api/notifications/email-preferences", headers=bob["h"])).json()
     assert prefs["email"] == "cand1@acme.io" and prefs["delivery_enabled"]
     assert {o["kind"]: o["enabled"] for o in prefs["options"]} == {
-        "assignment": True, "due_soon": True, "comment": True, "badge": False, "digest": True}
+        "assignment": True, "due_soon": True, "comment": True, "badge": False, "digest": True, "peer": True}
     r = await client.put("/api/notifications/email-preferences", headers=bob["h"], json={"assignment": False})
     assert {o["kind"]: o["enabled"] for o in r.json()["options"]}["assignment"] is False
 
@@ -158,10 +158,11 @@ async def test_weekly_digest_once_per_week_and_skips_empty_weeks(client, reg):
         assert too_new == 0  # nobody has been here a week yet
         await db.execute(update(User).values(created_at=datetime.now(timezone.utc) - timedelta(days=8)))
         await db.commit()
-        assert await send_digests(db) == 1
+        assert await send_digests(db) == 2  # Alice (her week) and the owner (cohort summary)
         assert await send_digests(db) == 0  # already sent this week
     sent = await outbox()
-    assert [m.to for m in sent] == ["cand0@acme.io"]  # Bob and the owner had an empty week: no email
+    assert sorted(m.to for m in sent) == ["cand0@acme.io", "owner@acme.io"]  # Bob had an empty week: no email
+    sent = [m for m in sent if m.to == "cand0@acme.io"]
     assert "Problems solved: 1" in sent[0].text and "streak: 1 day" in sent[0].text
 
 

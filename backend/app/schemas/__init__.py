@@ -119,6 +119,8 @@ class ProblemIn(BaseModel):
     tags: list[str] = []
     companies: list[str] = Field(default=[], max_length=20)
     starter_code: dict[str, str] = {}
+    # Function-style problem: {function, params: [{name, type}], returns, compare}. Omit for stdin/stdout.
+    signature: dict | None = None
     tests: list[TestCaseIn] = Field(min_length=1)
 
 
@@ -130,6 +132,7 @@ class ProblemSummary(ORM):
     companies: list[str] = []
     is_global: bool = False
     solved: bool = False
+    style: str = "stdio"  # "stdio" | "function"
 
 
 class ProblemOut(ORM):
@@ -140,6 +143,7 @@ class ProblemOut(ORM):
     tags: list[str]
     companies: list[str] = []
     starter_code: dict[str, str]
+    signature: dict | None = None
     is_global: bool = False
     sample_tests: list[TestCaseOut] = []
     hidden_test_count: int = 0
@@ -163,6 +167,8 @@ class TestResultOut(BaseModel):
     expected: str | None = None
     stdout: str | None = None
     stderr: str | None = None
+    large: bool = False  # a generated complexity-check input
+    printed: str | None = None  # function-style problems: what the code printed (stdout holds the return value)
 
 
 class RunOut(BaseModel):

@@ -8,8 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.api.routes import (
-    analytics, assignments, auth, documents, engagement, interviews, notifications, oauth, org, practice, problems,
-    review, submissions,
+    analytics, assignments, auth, documents, engagement, interviews, notifications, oauth, org, peer, practice,
+    problems, review, submissions,
 )
 from app.core.config import get_settings
 from app.core.logs import setup_logging
@@ -57,7 +57,7 @@ def create_app() -> FastAPI:
     )
     for r in (auth.router, oauth.router, org.router, problems.router, submissions.router, interviews.router, analytics.router,
               documents.router, practice.router, assignments.router, review.router, notifications.router,
-              engagement.router):
+              engagement.router, peer.router):
         app.include_router(r, prefix="/api")
 
     @app.get("/api/health")

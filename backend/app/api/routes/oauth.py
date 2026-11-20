@@ -30,6 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, CurrentUser, SystemDB
+from app.services import audit
 from app.api.routes.auth import _aware, _now, issue_tokens
 from app.core.config import get_settings
 from app.core.security import _encode, decode_token, hash_password, verify_password
@@ -194,6 +195,8 @@ async def _join_with_invite(db, provider: str, profile: Profile, tx: dict):
     await db.flush()
     _add_identity(db, user, provider, profile)
     invite.used_at = _now()
+    audit.record(db, user, "invite.accepted", target_type="invite", target_id=invite.id,
+                 target_label=invite.email or "(open invite)", details={"role": invite.role, "via": provider})
     return user, ""
 
 
@@ -228,6 +231,8 @@ async def _link(db, provider: str, profile: Profile, tx: dict):
         if await db.scalar(select(OAuthIdentity).where(OAuthIdentity.user_id == user.id, OAuthIdentity.provider == provider)):
             raise FlowError(f"You already have a {provider.title()} login linked. Unlink it first.")
         _add_identity(db, user, provider, profile)
+        audit.record(db, user, "auth.identity_linked", target_type="user", target_id=user.id,
+                     target_label=user.email, details={"provider": provider})
     return user, "&linked=" + provider
 
 
@@ -258,6 +263,8 @@ async def unlink_identity(identity_id: str, user: CurrentUser, db: DB):
         OAuthIdentity.user_id == user.id, OAuthIdentity.id != ident.id))
     if user.hashed_password == NO_PASSWORD and not others:
         raise HTTPException(status.HTTP_409_CONFLICT, "Set a password first, or you'd have no way to sign in")
+    audit.record(db, user, "auth.identity_unlinked", target_type="user", target_id=user.id, target_label=user.email,
+                 details={"provider": ident.provider})
     await db.delete(ident)
     await db.commit()
 
@@ -274,4 +281,6 @@ async def set_password(body: PasswordIn, user: CurrentUser, db: DB, request: Req
     if user.hashed_password != NO_PASSWORD and not verify_password(body.current_password or "", user.hashed_password):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
     user.hashed_password = hash_password(body.new_password)
+    audit.record(db, user, "auth.password_changed", target_type="user", target_id=user.id, target_label=user.email,
+                 request=request)
     await db.commit()

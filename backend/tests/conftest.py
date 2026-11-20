@@ -28,9 +28,18 @@ from app.services.sandbox import RawResult, Sandbox, get_sandbox  # noqa: E402
 class LocalPythonSandbox(Sandbox):
     """Test double: runs Python with the local interpreter (trusted test code only)."""
 
-    async def execute(self, language, code, inputs):
+    async def execute(self, language, code, inputs, extra_files=None, args=None):
+        from app.services.functions import testdata
+
         out = []
         for i in inputs:
+            try:  # what the real sandbox does inside the container
+                i = testdata.expand(i)
+                if args is not None:
+                    i = testdata.to_tokens(i, args)
+            except ValueError as e:
+                out.append(RawResult("invalid_input", "", f"Invalid test input: {e}", 0))
+                continue
             s = time.perf_counter()
             try:
                 r = subprocess.run([sys.executable, "-c", code], input=i.encode(), capture_output=True, timeout=5)

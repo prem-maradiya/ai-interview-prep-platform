@@ -12,6 +12,7 @@ from app.services import quota
 from app.services.llm import LLMError, LLMProvider, get_llm
 from app.services.achievements import check_badges
 from app.services.practice import record_attempt
+from app.services import functions
 from app.services.sandbox import Sandbox, SandboxError, get_sandbox, grade
 
 router = APIRouter(tags=["submissions"])
@@ -24,9 +25,18 @@ def problem_prompt(problem) -> str:
     return f"{problem.title}\n\n{problem.description}"
 
 
-async def _execute(sandbox: Sandbox, language: str, code: str, inputs: list[str]):
+def signature_of(problem) -> "functions.Signature | None":
+    return functions.Signature(**problem.signature) if problem.signature else None
+
+
+async def _execute(sandbox: Sandbox, language: str, code: str, inputs: list[str], sig=None):
+    """Run the candidate's code; for function-style problems with the generated driver attached."""
+    extra, args = None, None
+    if sig is not None:
+        code, extra = functions.prepare(sig, language, code)
+        args = sig.types
     try:
-        return await sandbox.execute(language, code, inputs)
+        return await sandbox.execute(language, code, inputs, extra, args)
     except SandboxError as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
 
@@ -42,8 +52,9 @@ async def run_code(problem_id: str, body: RunIn, user: CurrentUser, db: DB, sand
     else:
         samples = [t for t in problem.tests if not t.is_hidden]
         inputs, expected, hidden = [t.input for t in samples], [t.expected_output for t in samples], [False] * len(samples)
-    raw = await _execute(sandbox, body.language, body.code, inputs)
-    return grade(raw, expected, hidden, inputs)
+    sig = signature_of(problem)
+    raw = await _execute(sandbox, body.language, body.code, inputs, sig)
+    return grade(raw, expected, hidden, inputs, sig)
 
 
 @router.post("/problems/{problem_id}/submit", response_model=SubmissionOut, status_code=201)
@@ -53,8 +64,9 @@ async def submit_code(problem_id: str, body: RunIn, user: CurrentUser, db: DB, s
     await quota.consume(db, user, "sandbox")
     tests = problem.tests
     inputs = [t.input for t in tests]
-    raw = await _execute(sandbox, body.language, body.code, inputs)
-    result = grade(raw, [t.expected_output for t in tests], [t.is_hidden for t in tests], inputs)
+    sig = signature_of(problem)
+    raw = await _execute(sandbox, body.language, body.code, inputs, sig)
+    result = grade(raw, [t.expected_output for t in tests], [t.is_hidden for t in tests], inputs, sig)
     telemetry = body.telemetry.model_dump() if body.telemetry else None
     sub = Submission(
         tenant_id=user.tenant_id, user_id=user.id, problem_id=problem.id, language=body.language, code=body.code,

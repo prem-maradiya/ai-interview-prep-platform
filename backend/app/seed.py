@@ -1,8 +1,10 @@
-"""Global (shared) starter problems. All problems use stdin -> stdout I/O."""
+"""Global (shared) problems: classic stdin -> stdout ones plus function-style ones (seed_functions.py)."""
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Problem, ProblemList, TestCase
+from app.seed_functions import FUNCTION_PROBLEMS, function_problem_tests, stress_tests
+from app.services.functions import Signature, starter_code
 
 PY_READ = "import sys\n\ndef solve(data: str) -> str:\n    # your code here\n    return \"\"\n\nprint(solve(sys.stdin.read()))\n"
 JS_READ = "const data = require('fs').readFileSync(0, 'utf8');\n\nfunction solve(data) {\n  // your code here\n  return '';\n}\n\nconsole.log(solve(data));\n"
@@ -163,6 +165,11 @@ LISTS = [
      "description": "The patterns behind most array questions: hash maps, sliding windows and running sums.",
      "problems": ["Two Sum", "Valid Anagram", "Longest Substring Without Repeating Characters", "Maximum Subarray",
                   "Trapping Rain Water"]},
+    {"slug": "function-classics", "title": "Function-style classics",
+     "description": "Write a function, not I/O code: the judge passes arguments and checks the return value.",
+     "problems": ["Contains Duplicate", "Best Time to Buy and Sell Stock", "Valid Palindrome", "Longest Common Prefix",
+                  "Product of Array Except Self", "Rotate Image", "Top K Frequent Elements",
+                  "Median of Two Sorted Arrays"]},
     {"slug": "big-tech-frequent", "title": "Frequently asked at big tech",
      "description": "Problems commonly reported in interviews at large tech companies.",
      "problems": ["Two Sum", "Valid Parentheses", "Merge Intervals", "Number of Islands",
@@ -170,10 +177,12 @@ LISTS = [
 ]
 
 
-def _new_problem(p: dict) -> Problem:
+def _new_problem(p: dict, tests: list[tuple[str, str, bool]]) -> Problem:
+    signature = p.get("signature")
+    starter = starter_code(Signature(**signature)) if signature else dict(STARTER_CODE)
     problem = Problem(tenant_id=None, title=p["title"], description=p["description"], difficulty=p["difficulty"],
-                      tags=p["tags"], companies=p["companies"], starter_code=dict(STARTER_CODE))
-    problem.tests = [TestCase(input=i, expected_output=o, is_hidden=h, position=n) for n, (i, o, h) in enumerate(p["tests"])]
+                      tags=p["tags"], companies=p["companies"], starter_code=starter, signature=signature)
+    problem.tests = [TestCase(input=i, expected_output=o, is_hidden=h, position=n) for n, (i, o, h) in enumerate(tests)]
     return problem
 
 
@@ -183,16 +192,30 @@ async def seed_global_problems(db: AsyncSession) -> None:
     for spec in PROBLEMS:
         problem = existing.get(spec["title"])
         if problem is None:
-            db.add(_new_problem(spec))
+            db.add(_new_problem(spec, list(spec["tests"]) + stress_tests(spec["title"])))
             continue
         missing = {k: v for k, v in STARTER_CODE.items() if k not in (problem.starter_code or {})}
         if missing:
             problem.starter_code = {**(problem.starter_code or {}), **missing}  # reassign so the JSON change is saved
         if not problem.companies:
             problem.companies = list(spec["companies"])
+        have = {t.input for t in problem.tests}
+        if any(spec_input not in have for spec_input, _ref in _stress_specs(spec["title"])):
+            for i, o, h in stress_tests(spec["title"]):  # large tests added in a later version
+                if i not in have:
+                    problem.tests.append(TestCase(input=i, expected_output=o, is_hidden=h, position=len(problem.tests)))
+    for spec in FUNCTION_PROBLEMS:
+        if spec["title"] not in existing:
+            db.add(_new_problem(spec, function_problem_tests(spec)))
     have_lists = set((await db.scalars(select(ProblemList.slug).where(ProblemList.tenant_id.is_(None)))).all())
     for spec in LISTS:
         if spec["slug"] not in have_lists:
             db.add(ProblemList(tenant_id=None, slug=spec["slug"], title=spec["title"], description=spec["description"],
                                problem_titles=spec["problems"]))
     await db.commit()
+
+
+def _stress_specs(title: str):
+    from app.seed_functions import STRESS
+
+    return STRESS.get(title, [])

@@ -1,7 +1,11 @@
 """Runs untrusted code inside a sandbox container. Same script for every language image.
 
-Input: env PAYLOAD = base64(JSON {lang, code, tests: [stdin...], cpu_limit, wall_limit, output_limit}).
+Input: env PAYLOAD = base64(JSON {lang, code, tests: [stdin...], cpu_limit, wall_limit, output_limit,
+       optional extra_files: {name: source}, optional args: [param type...] for function-style problems}).
 Output: one line "@@RESULT@@" + JSON list (one entry per test), or a compile error for all tests.
+
+Each test's stdin is expanded first if it's a generated input, and for function-style problems
+converted from JSON arguments to the driver's token format (see testdata.py).
 
 Time is measured as CPU time (user + sys) of the child, and limited with RLIMIT_CPU by the kernel.
 That keeps verdicts fair on any machine: a busy or slow host makes wall-clock time longer, but
@@ -17,6 +21,8 @@ import signal
 import subprocess
 import sys
 
+import testdata  # sits next to this file in /opt/runner
+
 MARKER = "@@RESULT@@"
 
 LANGS = {
@@ -28,7 +34,7 @@ LANGS = {
         "run": ["java", "-Xmx256m", "-Xss64m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-cp", ".", "Main"],
     },
     "cpp": {"file": "sol.cpp", "compile": ["g++", "-O2", "-std=c++17", "-pipe", "-o", "sol", "sol.cpp"], "run": ["./sol"]},
-    "go": {"file": "main.go", "compile": ["go", "build", "-o", "sol", "main.go"], "run": ["./sol"]},
+    "go": {"file": "main.go", "compile": ["go", "build", "-o", "sol", "*.go"], "run": ["./sol"]},
 }
 
 CHILD_ENV = {
@@ -111,11 +117,17 @@ def main() -> None:
     os.makedirs("/tmp/work", exist_ok=True)
     with open(os.path.join("/tmp/work", spec["file"]), "w") as f:
         f.write(p["code"])
+    for name, source in (p.get("extra_files") or {}).items():
+        with open(os.path.join("/tmp/work", os.path.basename(name)), "w") as f:
+            f.write(source)
     if p["lang"] == "go" and os.path.isdir(PREBUILT_GO_CACHE):
         shutil.copytree(PREBUILT_GO_CACHE, CHILD_ENV["GOCACHE"], dirs_exist_ok=True)
 
     if spec["compile"]:
-        status, _, err, _ = run(spec["compile"], b"", p["compile_cpu_limit"], p["compile_wall_limit"], limit)
+        cmd = spec["compile"]
+        if "*.go" in cmd:  # the solution plus any generated driver file
+            cmd = cmd[:-1] + sorted(f for f in os.listdir("/tmp/work") if f.endswith(".go"))
+        status, _, err, _ = run(cmd, b"", p["compile_cpu_limit"], p["compile_wall_limit"], limit)
         if status != "ok":
             detail = err.strip() or ("Compilation timed out" if status == "timeout" else "Compilation failed")
             print(MARKER + json.dumps([{"status": "compile_error", "stdout": "", "stderr": detail[-4000:], "time_ms": 0}
@@ -123,7 +135,14 @@ def main() -> None:
             return
 
     results = []
-    for stdin in p["tests"]:
+    for test in p["tests"]:
+        try:
+            stdin = testdata.expand(test)
+            if p.get("args") is not None:
+                stdin = testdata.to_tokens(stdin, p["args"])
+        except (ValueError, KeyError) as e:
+            results.append({"status": "invalid_input", "stdout": "", "stderr": f"Invalid test input: {e}", "time_ms": 0})
+            continue
         status, out, err, cpu_ms = run(spec["run"], stdin.encode(), p["cpu_limit"], p["wall_limit"], limit)
         results.append({"status": status, "stdout": out, "stderr": err, "time_ms": cpu_ms})
     print(MARKER + json.dumps(results))

@@ -117,10 +117,11 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
 
 // ---- types ----
 export type User = { id: string; email: string; full_name: string; role: string; tenant: { id: string; name: string; slug: string; plan: string } };
-export type ProblemSummary = { id: string; title: string; difficulty: string; tags: string[]; is_global: boolean; solved: boolean };
+export type ProblemSummary = { id: string; title: string; difficulty: string; tags: string[]; is_global: boolean; solved: boolean; style?: "stdio" | "function" };
+export type Signature = { function: string; params: { name: string; type: string }[]; returns: string; compare: "exact" | "unordered" };
 export type TestCase = { id: string; input: string; expected_output: string; is_hidden: boolean };
-export type Problem = ProblemSummary & { description: string; starter_code: Record<string, string>; sample_tests: TestCase[]; hidden_test_count: number };
-export type TestResult = { index: number; status: string; passed: boolean; hidden: boolean; time_ms: number; input?: string; expected?: string; stdout?: string; stderr?: string };
+export type Problem = ProblemSummary & { description: string; starter_code: Record<string, string>; signature?: Signature | null; sample_tests: TestCase[]; hidden_test_count: number };
+export type TestResult = { index: number; status: string; passed: boolean; hidden: boolean; time_ms: number; input?: string; expected?: string; stdout?: string; stderr?: string; large?: boolean; printed?: string };
 export type RunResult = { verdict: string; passed: number; total: number; runtime_ms: number; results: TestResult[] };
 export type Submission = RunResult & {
   id: string; user_id: string; problem_id: string; language: string; code: string; ai_review: string | null; created_at: string;

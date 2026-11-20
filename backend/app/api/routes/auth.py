@@ -18,6 +18,7 @@ from app.db.models import Invite, RefreshToken, Role, Tenant, User
 from app.schemas import (
     AcceptInviteIn, LoginIn, PasswordResetConfirmIn, PasswordResetRequestIn, RefreshIn, RegisterOrgIn, TokenOut, UserOut,
 )
+from app.services import audit
 from app.services.email import app_url, queue_email, render
 from app.services.ratelimit import enforce
 
@@ -146,6 +147,8 @@ async def accept_invite(body: AcceptInviteIn, db: SystemDB, request: Request):
     invite.used_at = _now()
     db.add(user)
     await db.flush()
+    audit.record(db, user, "invite.accepted", target_type="invite", target_id=invite.id,
+                 target_label=invite.email or "(open invite)", details={"role": invite.role}, request=request)
     tokens = await issue_tokens(db, user)
     await db.commit()
     return tokens
@@ -198,5 +201,7 @@ async def confirm_password_reset(body: PasswordResetConfirmIn, db: SystemDB, req
         raise invalid
     user.hashed_password = hash_password(body.password)
     await revoke_all_for_user(db, user.id)  # sign out every existing session
+    audit.record(db, user, "auth.password_reset", target_type="user", target_id=user.id,
+                 target_label=user.email, request=request)
     await db.commit()
     return Response(status_code=204)
