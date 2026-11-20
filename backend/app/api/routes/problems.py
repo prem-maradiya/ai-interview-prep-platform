@@ -57,7 +57,12 @@ async def list_problems(user: CurrentUser, db: DB, difficulty: str | None = None
 
 @router.get("/{problem_id}", response_model=ProblemOut)
 async def get_problem(problem_id: str, user: CurrentUser, db: DB):
-    return to_out(await get_visible_problem(db, problem_id, user))
+    from app.services.contests import aware, running_contest_for
+
+    out = to_out(await get_visible_problem(db, problem_id, user))
+    if c := await running_contest_for(db, user, problem_id):
+        out.contest = {"id": c.id, "title": c.title, "ends_at": aware(c.ends_at), "locked": user.role == "candidate"}
+    return out
 
 
 @router.get("/{problem_id}/tests", response_model=list[TestCaseOut])

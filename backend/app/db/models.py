@@ -146,6 +146,9 @@ class Submission(Base):
     # signals derived from it plus code similarity. Signals are hints for mentors, not verdicts.
     telemetry: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     integrity_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Set when the submission was made during a running contest that includes the problem.
+    contest_id: Mapped[str | None] = mapped_column(ForeignKey("contests.id", ondelete="SET NULL"), nullable=True,
+                                                   index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
@@ -167,6 +170,8 @@ class Interview(Base):
     code_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
     scorecard: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # System design whiteboard: {"elements": [...]} (see app.services.whiteboard).
+    board: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -193,6 +198,8 @@ class InterviewMessage(Base):
     input_mode: Mapped[str] = mapped_column(String(10), default="text", server_default="text")  # text | voice
     code: Mapped[str | None] = mapped_column(Text, nullable=True)  # editor snapshot sent with this answer
     code_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Text description of the whiteboard, when it changed since the previous answer.
+    board_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     interview: Mapped[Interview] = relationship(back_populates="messages")
@@ -348,6 +355,7 @@ class PeerSession(Base):
     # Per round ("1"/"2"): {"language", "code"} and the interviewer's private notes.
     code: Mapped[dict] = mapped_column(JSON, default=dict)
     notes: Mapped[dict] = mapped_column(JSON, default=dict)
+    board: Mapped[dict] = mapped_column(JSON, default=dict)  # shared whiteboard, both people can draw
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -381,6 +389,77 @@ class PeerFeedback(Base):
     code_quality: Mapped[int] = mapped_column(Integer)
     hire: Mapped[str] = mapped_column(String(12))  # strong_no | no | yes | strong_yes
     comments: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Discussion(Base):
+    """A post (or a reply, via parent_id) in a problem's discussion, visible within the organization."""
+
+    __tablename__ = "discussions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    problem_id: Mapped[str] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("discussions.id", ondelete="CASCADE"), nullable=True,
+                                                  index=True)
+    body: Mapped[str] = mapped_column(Text)
+    score: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    author: Mapped[User] = relationship(lazy="joined")
+
+
+class DiscussionVote(Base):
+    __tablename__ = "discussion_votes"
+    __table_args__ = (UniqueConstraint("discussion_id", "user_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    discussion_id: Mapped[str] = mapped_column(ForeignKey("discussions.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    value: Mapped[int] = mapped_column(Integer)  # +1 or -1
+
+
+class Editorial(Base):
+    """The organization's official write-up of a problem (one per problem per organization)."""
+
+    __tablename__ = "editorials"
+    __table_args__ = (UniqueConstraint("tenant_id", "problem_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    problem_id: Mapped[str] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"), index=True)
+    author_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ProblemReveal(Base):
+    """A member chose to see discussions and the editorial before solving the problem."""
+
+    __tablename__ = "problem_reveals"
+    __table_args__ = (UniqueConstraint("user_id", "problem_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    problem_id: Mapped[str] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Contest(Base):
+    """A timed contest: a set of problems, a start and end, ICPC-style scoring."""
+
+    __tablename__ = "contests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    problem_ids: Mapped[list] = mapped_column(JSON, default=list)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    freeze_minutes: Mapped[int] = mapped_column(Integer, default=0)  # scoreboard freezes this long before the end
+    penalty_minutes: Mapped[int] = mapped_column(Integer, default=20)  # per wrong attempt on a solved problem
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

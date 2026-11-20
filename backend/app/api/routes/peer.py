@@ -28,6 +28,7 @@ from app.db.session import tenant_session
 from app.schemas import Language
 from app.services import quota
 from app.services.notifications import notify
+from app.services import whiteboard
 from app.services.rooms import Connection, get_hub
 from app.services.sandbox import Sandbox, get_sandbox, grade
 
@@ -112,6 +113,7 @@ async def _state(db, s: PeerSession, user: User) -> dict:
                       "candidate_id": candidate_id(s, i + 1)} for i, pid in enumerate(s.problem_ids)],
         "code": {"language": round_code.get("language", "python"), "code": round_code.get("code")},
         "notes": (s.notes or {}).get(str(s.round), "") if role == "interviewer" else None,
+        "board": s.board or {"elements": []},
         "messages": [{"id": m.id, "sender_id": m.sender_id, "round": m.round, "text": m.text,
                       "created_at": m.created_at} for m in messages],
         "feedback": [_feedback_out(f) for f in visible],
@@ -370,7 +372,7 @@ async def _handle(msg: dict, session_id: str, tenant_id: str, user_id: str, conn
     if kind == "ping":
         await conn.send({"type": "pong"})
         return
-    if kind not in ("code", "chat", "notes"):
+    if kind not in ("code", "chat", "notes", "board"):
         return
     async with tenant_session(tenant_id) as db:
         s = await db.get(PeerSession, session_id)
@@ -394,6 +396,16 @@ async def _handle(msg: dict, session_id: str, tenant_id: str, user_id: str, conn
             await db.commit()
             await get_hub().publish(session_id, {"type": "chat", "message": {
                 "id": m.id, "sender_id": user_id, "round": m.round, "text": text, "created_at": m.created_at}})
+        elif kind == "board":
+            # Both people can draw. Operations, not whole boards, so simultaneous edits to different
+            # shapes don't overwrite each other.
+            try:
+                s.board = whiteboard.apply_ops(s.board, msg.get("ops"))
+            except whiteboard.BoardError as e:
+                await conn.send({"type": "error", "detail": f"Whiteboard: {e}"})
+                return
+            await db.commit()
+            await get_hub().publish(session_id, {"type": "board", "ops": msg.get("ops"), "from": user_id})
         elif kind == "notes" and user_id == interviewer_id(s):
             s.notes = {**(s.notes or {}), key: str(msg.get("text", ""))[:10_000]}  # private: not broadcast
             await db.commit()

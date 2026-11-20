@@ -7,6 +7,7 @@ import { listen, speak, stopSpeaking, voiceSupport, type Listener } from "../lib
 import { useAuth } from "../lib/auth";
 import CommentThread from "../components/CommentThread";
 import { LANGUAGES, TEMPLATES, monacoLang } from "../lib/languages";
+import Whiteboard, { applyOps, type Board, type Op } from "../components/Whiteboard";
 
 const STARTER: Record<string, string> = Object.fromEntries(
   LANGUAGES.map((l) => [l.id, TEMPLATES[l.id]]),
@@ -31,11 +32,14 @@ export default function InterviewRoom() {
   const [code, setCode] = useState(STARTER.python);
   const [stdin, setStdin] = useState("");
   const [runResult, setRunResult] = useState<RunResult | null>(null);
+  // whiteboard (system design interviews)
+  const [board, setBoard] = useState<Board>({ elements: [] });
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api<Interview>(`/interviews/${id}`).then((data) => {
       setIv(data);
+      if (data.board) setBoard(data.board);
       if (data.code) {
         setCode(data.code);
         setLang(data.code_language ?? "python");
@@ -96,6 +100,7 @@ export default function InterviewRoom() {
       content,
       input_mode: spoke ? "voice" : "text",
       ...(technical ? { code, code_language: lang } : {}),
+      ...(iv.kind === "system_design" ? { board } : {}),
     };
     setDraft("");
     setSpoke(false);
@@ -165,6 +170,7 @@ export default function InterviewRoom() {
               {m.sender === "interviewer" ? "Interviewer" : "You"}
               {m.input_mode === "voice" && " · 🎙"}
               {m.code && " · shared code"}
+              {m.board_text && " · shared diagram"}
             </div>
             <Markdown>{m.content}</Markdown>
           </div>
@@ -200,6 +206,7 @@ export default function InterviewRoom() {
         </div>
       )}
       {technical && active && <div className="small muted">Your editor code is shared with the interviewer each time you send an answer (if it changed).</div>}
+      {iv.kind === "system_design" && active && <div className="small muted">Your diagram is shared with the interviewer each time you send an answer (if it changed).</div>}
     </div>
   );
 
@@ -249,6 +256,13 @@ export default function InterviewRoom() {
                 {runResult.results[0].stderr && <pre className="stderr">{runResult.results[0].stderr}</pre>}
               </div>
             )}
+          </div>
+        </div>
+      ) : iv.kind === "system_design" ? (
+        <div className="interview-split design">
+          {chat}
+          <div className="card">
+            <Whiteboard board={board} readOnly={!active} onOps={(ops: Op[]) => setBoard((b) => applyOps(b, ops))} />
           </div>
         </div>
       ) : chat}

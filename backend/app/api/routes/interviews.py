@@ -13,6 +13,7 @@ from app.db.session import tenant_session
 from app.schemas import (
     InterviewIn, InterviewOut, InterviewRunIn, InterviewSummary, MessageIn, MessageOut, RunOut,
 )
+from app.services import whiteboard
 from app.services import quota
 from app.services.achievements import check_badges
 from app.services.delivery import delivery_metrics
@@ -32,7 +33,7 @@ def _ctx(iv: Interview) -> InterviewContext:
 
 
 def _history(iv: Interview) -> list[Turn]:
-    return [Turn(m.sender, m.content, m.code, m.code_language) for m in iv.messages]
+    return [Turn(m.sender, m.content, m.code, m.code_language, m.board_text) for m in iv.messages]
 
 
 async def _own_interview(db, interview_id: str, user) -> Interview:
@@ -63,6 +64,14 @@ def _add_answer(iv: Interview, body: MessageIn) -> InterviewMessage:
                               input_mode=body.input_mode, code=code, code_language=body.code_language if code else None)
     if code:
         iv.code, iv.code_language = code, body.code_language
+    if body.board is not None:
+        try:
+            board = whiteboard.clean_board(body.board)
+        except whiteboard.BoardError as e:
+            raise HTTPException(422, f"Whiteboard: {e}")
+        if board != (iv.board or {"elements": []}):  # like code: only sent to the interviewer when it changed
+            iv.board = board
+            answer.board_text = whiteboard.describe(board) or "(the whiteboard is now empty)"
     iv.messages.append(answer)
     return answer
 

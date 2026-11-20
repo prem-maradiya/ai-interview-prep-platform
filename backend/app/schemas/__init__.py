@@ -147,6 +147,8 @@ class ProblemOut(ORM):
     is_global: bool = False
     sample_tests: list[TestCaseOut] = []
     hidden_test_count: int = 0
+    # Set while a running contest includes this problem (hints, reviews and discussions are off for candidates).
+    contest: dict | None = None
 
 
 # ---------- code execution ----------
@@ -298,6 +300,7 @@ class MessageIn(BaseModel):
     input_mode: Literal["text", "voice"] = "text"
     code: str | None = Field(default=None, max_length=50_000)
     code_language: Language | None = None
+    board: dict | None = None  # system design whiteboard: {"elements": [...]}
 
 
 class InterviewRunIn(BaseModel):
@@ -313,6 +316,7 @@ class MessageOut(ORM):
     input_mode: str = "text"
     code: str | None = None
     code_language: str | None = None
+    board_text: str | None = None
     created_at: datetime
 
 
@@ -332,6 +336,7 @@ class InterviewOut(ORM):
     has_job_description: bool = False
     code: str | None = None
     code_language: str | None = None
+    board: dict | None = None
     messages: list[MessageOut] = []
 
 

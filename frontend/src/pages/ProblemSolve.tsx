@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Discussion, Editorial } from "../components/ProblemCommunity";
 import Editor from "@monaco-editor/react";
 import Markdown from "react-markdown";
 import { LANGUAGES, TEMPLATES, monacoLang, type LangId } from "../lib/languages";
@@ -18,6 +19,9 @@ export default function ProblemSolve() {
   const [submission, setSubmission] = useState<Submission | null>(null);
   const [history, setHistory] = useState<Submission[]>([]);
   const [hint, setHint] = useState<{ level: number; text: string } | null>(null);
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<"problem" | "discussion" | "editorial">(
+    (params.get("tab") as "discussion" | "editorial") ?? "problem");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -121,6 +125,20 @@ export default function ProblemSolve() {
     <div className="solve">
       <section className="card prose">
         <h2>{problem.title} <span className={`diff ${problem.difficulty}`}>{problem.difficulty}</span></h2>
+        {problem.contest && (
+          <div className="contest-banner small">
+            🏁 Part of the running contest <Link to={`/contests/${problem.contest.id}`}><b>{problem.contest.title}</b></Link>
+            {problem.contest.locked ? ": your submissions count, and hints, AI reviews and discussions are off until it ends." : " (you're staff, so nothing is locked)."}
+          </div>
+        )}
+        <div className="tabs">
+          {(["problem", "discussion", "editorial"] as const).map((t) => (
+            <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
+          ))}
+        </div>
+        {tab === "discussion" && <Discussion problemId={problem.id} />}
+        {tab === "editorial" && <Editorial problemId={problem.id} />}
+        {tab === "problem" && (<>
         <Markdown>{problem.description}</Markdown>
         {problem.signature && (
           <div className="signature">
@@ -139,7 +157,7 @@ export default function ProblemSolve() {
         ))}
         <p className="muted small">+ {problem.hidden_test_count} hidden tests on submit</p>
         <div className="row">
-          <button onClick={getHint} disabled={!!busy || hint?.level === 3}>
+          <button onClick={getHint} disabled={!!busy || hint?.level === 3 || !!problem.contest?.locked}>
             {busy === "hint" ? "Thinking…" : hint ? `Next hint (${hint.level + 1}/3)` : "Get a hint"}
           </button>
         </div>
@@ -159,6 +177,7 @@ export default function ProblemSolve() {
             ))}
           </>
         )}
+        </>)}
       </section>
 
       <section className="stack">

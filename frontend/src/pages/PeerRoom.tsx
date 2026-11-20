@@ -6,6 +6,7 @@ import { api, tokens, type Problem, type RunResult } from "../lib/api";
 import { LANGUAGES, TEMPLATES, monacoLang, type LangId } from "../lib/languages";
 import { Results, signatureText } from "./ProblemSolve";
 import { HIRE_LABEL } from "./Peer";
+import Whiteboard, { applyOps, type Board, type Op } from "../components/Whiteboard";
 
 type Person = { id: string; name: string } | null;
 type Message = { id: string; sender_id: string; round: number; text: string; created_at: string };
@@ -15,7 +16,7 @@ type State = {
   me: string; host: Person; guest: Person; invited: Person; candidate_id: string | null; interviewer_id: string | null;
   problem: Problem | null; problems: { round: number; id: string; title: string; candidate_id: string | null }[];
   code: { language: string; code: string | null }; notes: string | null; messages: Message[]; feedback: Feedback[];
-  feedback_given: number[]; online: string[];
+  feedback_given: number[]; online: string[]; board: Board;
 };
 
 const wsUrl = (id: string) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/peer/${id}/ws`;
@@ -31,6 +32,8 @@ export default function PeerRoom() {
   const [run, setRun] = useState<RunResult | null>(null);
   const [notes, setNotes] = useState("");
   const [chat, setChat] = useState("");
+  const [board, setBoard] = useState<Board>({ elements: [] });
+  const [panel, setPanel] = useState<"code" | "board">("code");
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -54,6 +57,7 @@ export default function PeerRoom() {
     setMessages(st.messages);
     setOnline(st.online);
     setNotes(st.notes ?? "");
+    setBoard(st.board ?? { elements: [] });
     const l = (st.code.language as LangId) || "python";
     setLang(l);
     setCode(st.code.code ?? st.problem?.starter_code?.[l] ?? TEMPLATES[l]);
@@ -82,6 +86,8 @@ export default function PeerRoom() {
         else if (m.type === "presence") setOnline(m.online);
         else if (m.type === "chat") setMessages((xs) => (xs.some((x) => x.id === m.message.id) ? xs : [...xs, m.message]));
         else if (m.type === "run") setRun(m.result);
+        else if (m.type === "board" && current.current && m.from !== current.current.me) setBoard((b) => applyOps(b, m.ops));
+        else if (m.type === "error") setError(m.detail);
         else if (m.type === "code") {
           const cur = current.current;
           if (cur && m.from !== cur.me && m.round === cur.round) { // ignore the echo of our own typing
@@ -123,6 +129,11 @@ export default function PeerRoom() {
     setLang(l);
     setCode(starter);
     send({ type: "code", code: starter, language: l });
+  }
+
+  function onBoardOps(ops: Op[]) {
+    setBoard((b) => applyOps(b, ops)); // show it right away, then share it
+    send({ type: "board", ops });
   }
 
   function onNotes(v: string) {
@@ -261,6 +272,18 @@ export default function PeerRoom() {
         </section>
 
         <section className="stack">
+          <div className="tabs">
+            <button className={panel === "code" ? "active" : ""} onClick={() => setPanel("code")}>Code</button>
+            <button className={panel === "board" ? "active" : ""} onClick={() => setPanel("board")}>
+              Whiteboard {board.elements.length > 0 && <span className="small muted">({board.elements.length})</span>}
+            </button>
+          </div>
+          {panel === "board" ? (
+            <div className="card">
+              <div className="small muted">Both of you can draw. Good for "how would this scale?" follow-ups.</div>
+              <Whiteboard board={board} onOps={onBoardOps} readOnly={!participant || done} />
+            </div>
+          ) : (<>
           <div className="row between">
             <select value={lang} onChange={(e) => switchLang(e.target.value as LangId)} disabled={s.my_role !== "candidate" || done}>
               {LANGUAGES.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
@@ -274,6 +297,7 @@ export default function PeerRoom() {
               options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false, readOnly: s.my_role !== "candidate" || done }} />
           </div>
           {run && <Results r={run} fn={!!s.problem?.signature} />}
+          </>)}
         </section>
       </div>
     </div>

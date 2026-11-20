@@ -38,6 +38,8 @@ EMAIL_KINDS: dict[str, dict] = {
     "badge": {"label": "Badges earned", "default": False},
     "digest": {"label": "Weekly progress digest (mentors: includes a cohort summary)", "default": True},
     "peer": {"label": "Peer interview invitations", "default": True},
+    "contest": {"label": "New contests", "default": True},
+    "discussion": {"label": "Replies to your discussion posts", "default": True},
 }
 
 
@@ -197,7 +199,15 @@ def _smtp_send(m: Email) -> None:
 
 
 async def send(m: Email, attempts: int = 3) -> bool:
+    from app.core.observability import EMAILS
+
     backend = get_settings().email_backend
+    ok = await _send(m, backend, attempts)
+    EMAILS.labels(backend, "sent" if ok else "failed").inc()
+    return ok
+
+
+async def _send(m: Email, backend: str, attempts: int) -> bool:
     if backend == "memory":
         sent_messages.append(m)
         return True

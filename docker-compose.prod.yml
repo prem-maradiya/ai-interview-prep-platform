@@ -1,0 +1,62 @@
+# Production overrides: HTTPS with Caddy, strict settings, no local mail inbox.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Needs DOMAIN, JWT_SECRET, POSTGRES_PASSWORD and SMTP_* in .env (see docs/DEPLOY.md).
+
+x-prod-env: &prod-env
+  ENVIRONMENT: production
+  PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
+  CORS_ORIGINS: '["https://${DOMAIN}"]'
+  DATABASE_URL: postgresql+asyncpg://prep:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/prep
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+  SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env (your email provider)}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+  EMAIL_FROM: ${EMAIL_FROM:-PrepForge <no-reply@${DOMAIN}>}
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    restart: always
+
+  redis:
+    restart: always
+
+  backend:
+    environment: *prod-env
+    restart: always
+
+  worker:
+    environment: *prod-env
+    restart: always
+
+  frontend:
+    ports: !reset []      # only Caddy is published
+    restart: always
+
+  mailpit:
+    profiles: ["local-mail"]   # not started in production
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on: [frontend, backend]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # TLS certificates (Let's Encrypt), keep across restarts
+      - caddy_config:/config
+    restart: always
+    mem_limit: 128m
+
+volumes:
+  caddy_data:
+  caddy_config:

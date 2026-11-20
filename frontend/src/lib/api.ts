@@ -120,7 +120,7 @@ export type User = { id: string; email: string; full_name: string; role: string;
 export type ProblemSummary = { id: string; title: string; difficulty: string; tags: string[]; is_global: boolean; solved: boolean; style?: "stdio" | "function" };
 export type Signature = { function: string; params: { name: string; type: string }[]; returns: string; compare: "exact" | "unordered" };
 export type TestCase = { id: string; input: string; expected_output: string; is_hidden: boolean };
-export type Problem = ProblemSummary & { description: string; starter_code: Record<string, string>; signature?: Signature | null; sample_tests: TestCase[]; hidden_test_count: number };
+export type Problem = ProblemSummary & { description: string; starter_code: Record<string, string>; signature?: Signature | null; contest?: { id: string; title: string; ends_at: string; locked: boolean } | null; sample_tests: TestCase[]; hidden_test_count: number };
 export type TestResult = { index: number; status: string; passed: boolean; hidden: boolean; time_ms: number; input?: string; expected?: string; stdout?: string; stderr?: string; large?: boolean; printed?: string };
 export type RunResult = { verdict: string; passed: number; total: number; runtime_ms: number; results: TestResult[] };
 export type Submission = RunResult & {
@@ -128,6 +128,7 @@ export type Submission = RunResult & {
   telemetry?: Record<string, number> | null; integrity_flags?: IntegrityFlag[] | null; // staff only
 };
 export type Message = {
+  board_text?: string | null;
   seq: number; sender: "interviewer" | "candidate"; content: string; created_at: string;
   input_mode?: "text" | "voice"; code?: string | null; code_language?: string | null;
 };
@@ -196,6 +197,7 @@ export type Scorecard = {
   delivery?: Delivery;
 };
 export type Interview = {
+  board?: { elements: any[] } | null;
   id: string; user_id: string; kind: string; role_title: string; level: string; focus: string; status: string;
   overall_score: number | null; scorecard: Scorecard | null; created_at: string; messages: Message[];
   has_resume?: boolean; has_job_description?: boolean; code?: string | null; code_language?: string | null;

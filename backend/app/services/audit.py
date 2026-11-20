@@ -23,6 +23,8 @@ ACTIONS = {
     "problem.deleted": "Deleted a problem",
     "assignment.created": "Created an assignment",
     "assignment.deleted": "Deleted an assignment",
+    "contest.created": "Scheduled a contest",
+    "contest.deleted": "Deleted a contest",
     "auth.password_changed": "Changed their password",
     "auth.password_reset": "Reset their password by email",
     "auth.identity_linked": "Linked a sign-in provider",

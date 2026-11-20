@@ -24,6 +24,9 @@ x-backend-env: &backend-env
   SMTP_USERNAME: ${SMTP_USERNAME:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SANDBOX_WARM_POOL: ${SANDBOX_WARM_POOL:-1}
+  LOG_FORMAT: ${LOG_FORMAT:-text}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  SENTRY_DSN: ${SENTRY_DSN:-}
 
 services:
   db:
@@ -56,17 +59,22 @@ services:
       - path: .env
         required: false
     environment: *backend-env
-    # Apply migrations, then serve. Proxy headers are trusted because only nginx can reach this port.
+    # Apply migrations, then serve. Proxy headers are trusted because only the reverse proxy can reach
+    # this port. The app writes its own access log (with request IDs), so uvicorn's is turned off.
     command: >-
       sh -c "alembic upgrade head &&
-      uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --no-access-log"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-      mailpit:
-        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/ready', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     restart: unless-stopped
     mem_limit: 512m
 

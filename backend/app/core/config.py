@@ -7,6 +7,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_name: str = "PrepForge"
+    app_version: str = "0.3.0"
+    # Operations: "json" logs one object per line (for log platforms); "text" is for humans.
+    log_format: str = "text"
+    # Bearer token for /api/metrics. Unset: only clients on a private network may scrape it.
+    metrics_token: str | None = None
+    sentry_dsn: str | None = None  # error tracking (optional)
+    sentry_traces_sample_rate: float = 0.0
     environment: str = "development"  # "production" enables strict startup checks
     database_url: str = "postgresql+asyncpg://prep:prep@localhost:5432/prep"
     # Non-superuser role that transactions switch to, so PostgreSQL row-level security applies even

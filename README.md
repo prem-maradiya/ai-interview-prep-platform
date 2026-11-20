@@ -33,6 +33,7 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 | **Function-style problems** | A problem declares a signature such as `pairSum(nums: int[], target: int) -> int[]` (types: int, long, float, bool, string and 1-D/2-D arrays). Starter code for all five languages is generated from it, and a small driver is generated per language that reads the arguments, calls the function and prints the return value as JSON. Results are compared as JSON values (floats within 1e-6, optionally in any order). What the candidate prints is shown separately from what the function returned. Mentors can author these in the problem editor. |
 | **Complexity checks** | Hidden stress tests with up to 200,000 elements, stored as compact generator specs (`@gen {...}`) and expanded inside the sandbox, so large inputs never go through the job queue. Their expected answers are computed once, at seed time, by reference solutions. An O(n²) answer that passes every normal test but times out on a large one gets **too slow**, with a hint to look for a faster algorithm. |
 | **Docker sandbox** | Runs on a separate **worker** process fed by a Redis job queue (arq). Only the worker has the Docker socket; the API never does. A **warm pool** of pre-started containers (one per language by default) skips container start-up: a run `docker exec`s into one, and the container is destroyed right after, so each one still serves exactly one run. Python runs went from ~980 ms to ~600 ms (median, full stack), and the stdlib bytecode and a precompiled `<bits/stdc++.h>` are baked into the images (C++ runs dropped from ~3.5 s to ~1.1 s). Fresh container per run from a small per-language Alpine image: `--network none`, read-only rootfs, tmpfs, per-language memory and PID limits, `cap-drop ALL`, `no-new-privileges`, uid `nobody`, optional gVisor (`SANDBOX_RUNTIME=runsc`). **Time limits are CPU time, enforced by the kernel (`RLIMIT_CPU`)**, so verdicts are the same on a busy laptop and a fast server; a separate wall-clock limit catches programs that sleep or block. Expected outputs never enter the container. |
+| **System design whiteboard** | A shared diagram canvas (services, databases, queues, notes, labelled arrows). In AI system design interviews the interviewer reads a text description of your diagram with each answer (only when it changed) and grades the final design; in peer interviews both people draw and every change syncs live as small operations, so two people editing different shapes never overwrite each other. |
 | **Peer mock interviews** | Practise with a teammate: open a room (for anyone in the org, or invite one member), take turns as candidate and interviewer on a different problem each round, then rate each other (problem solving, communication, code quality, hire signal). The candidate's code, chat, test runs and who's online sync live over **WebSockets**; only the candidate can type, so there are never two writers. The interviewer keeps private notes. Rooms work across several API replicas through **Redis pub/sub**, everything is saved as it happens (a reload loses nothing), and mentors see each candidate's peer history. |
 | **AI mock interviews** | Behavioral / technical (DSA) / system design, tuned by role, level and focus. The interviewer asks one question per turn, follows up, and its replies **stream word by word** over Server-Sent Events. Ending the interview produces a structured scorecard: 5 rubric dimensions (1–5), overall 0–100, hire signal, strengths, improvements and topics to practice. |
 | **Resume & job fit** | Upload a resume or job description (PDF/TXT/MD, text extracted server-side, file discarded) or paste it. Private to the owner, even within the org. A **fit report** gives a match score, matched/missing skills, truthful resume edits and likely questions. |
@@ -46,6 +47,8 @@ scorecards, AI code reviews, progressive hints, and cohort analytics for mentors
 | **CSV exports** | Cohort report and per-assignment progress as CSV. Cells that spreadsheets would execute as formulas (`=`, `+`, `-`, `@`) are neutralised (CSV-injection safe). |
 | **AI coaching** | AI code review on any submission (correctness, complexity, style), cached per submission. 3-level progressive hints that never give the full solution. |
 | **Analytics** | Candidate dashboard: solved by difficulty, acceptance rate, interview score trend, weakest rubric dimensions. Mentor view: cohort leaderboard with XP and levels. Mentors' weekly digest email adds a **cohort summary**: who practised, problems solved, assignment completion and who has gone quiet. |
+| **Contests** | Mentors schedule timed contests (up to 12 problems, up to 7 days). ICPC-style scoreboard: problems solved, then penalty time (minutes to each solve plus a penalty per rejected attempt; compile errors are free), ties share a rank, the first solve of each problem is highlighted. Optional **freeze** hides others' last-minute results until the end. While it runs, every submission to its problems counts automatically and candidates can't use hints, AI reviews, discussions or editorials for them. Problems stay hidden until the start. |
+| **Discussions & editorials** | Per-problem discussion threads inside the organization (markdown and code blocks, replies, up/down votes, edit, delete, mentor moderation, reply notifications) and a mentor-written **editorial** (with an optional AI first draft). Both unlock once you've solved the problem; you can peek earlier, but that's recorded and shown to mentors as an integrity hint if you solve it afterwards. |
 | **Audit log** | Role changes, deactivations, invites (created and accepted), problem and assignment changes, and password / sign-in method changes are recorded with who, what, when and from which IP, in the same transaction as the change. Admins can filter and export it as CSV; nobody can edit it through the API. |
 | **Notifications** | In-app bell for new assignments, mentor feedback and replies, badges, and "due within 24 hours" reminders. Deleting an assignment removes its notifications. |
 | **Email** | The same notifications by email, plus a **weekly progress digest** (solved problems, streak, reviews due, open assignments; skipped when there's nothing to say). Per-kind opt-ins on the Account page, and one-click unsubscribe (RFC 8058 `List-Unsubscribe`) in every email. Emails are sent only after the transaction commits, in the background with retries. Reminders and digests run in the API with no cron to set up, and are safe with several API replicas (each email is claimed in the database first). Any SMTP provider works; Docker Compose ships **Mailpit**, a local inbox at http://localhost:8025. |
@@ -62,6 +65,8 @@ system prompts, and the model is told to treat it as data.
 `LLM_PROVIDER=mock` (the default) is a deterministic offline provider, so the whole app runs and tests pass without an API key.
 
 ## Run it
+For a production server with HTTPS, backups and monitoring, see **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
 
 ### Option A — Docker Compose (everything)
 ```bash
@@ -133,6 +138,10 @@ backend/app/
   services/rooms.py    WebSocket rooms for peer interviews (Redis pub/sub or in-process)
   services/audit.py    audit log
   api/routes/peer.py   peer interview REST + WebSocket endpoints
+  api/routes/contests.py, services/contests.py  contests and ICPC-style scoreboards
+  api/routes/discussions.py  discussions, votes, editorials
+  services/whiteboard.py  whiteboard validation, operations and text description
+  core/observability.py  request IDs, JSON logs, Prometheus metrics, Sentry
   services/ratelimit.py Redis / in-memory rate limiter
   services/integrity.py integrity signals + code-similarity normaliser
   services/assignments.py live assignment progress
@@ -180,6 +189,14 @@ How it behaves:
 - **Windows:** keep the project outside OneDrive (or exclude `node_modules` and `.venv` from sync). Syncing tens of thousands of small files slows builds and Docker file sharing considerably. The repo enforces LF line endings (`.gitattributes`), so files copied into Linux containers behave the same as on Linux and macOS.
 - **Freeing space:** `docker builder prune` removes build cache. `docker compose down` stops the stack and keeps your data; add `-v` to delete the database as well.
 
+## Operations
+- **Health:** `/api/health` (liveness) and `/api/ready` (database and Redis; 503 when not ready). Docker Compose uses readiness as the API's health check.
+- **Logs:** every request gets an ID (returned as `X-Request-ID` and included in each log line). `LOG_FORMAT=json` writes one JSON object per line for log platforms.
+- **Metrics:** `/api/metrics` for Prometheus: request rate, latency and status per route, judged runs by language and verdict, sandbox latency, emails, open WebSockets. Reachable only inside the Docker network (or with `METRICS_TOKEN`).
+- **Errors:** set `SENTRY_DSN` for Sentry (bodies, cookies, tokens and emails are stripped).
+- **Backups:** `./scripts/backup.sh` and `./scripts/restore.sh` (tested end to end, including the row-level security policies and grants).
+- **Production:** `docker-compose.prod.yml` adds Caddy with automatic HTTPS and strict settings. Step-by-step in [docs/DEPLOY.md](docs/DEPLOY.md).
+
 ## Authoring problems
 Mentors create org-private problems on the Problems page, in either style:
 - **stdin/stdout:** test input is the program's stdin; expected output is compared line by line.
@@ -191,4 +208,5 @@ For a complexity check, start a hidden test's input with `@gen` and a generator 
 ## Roadmap (next features)
 - **Billing:** Stripe plans wired to quotas (after the app is complete).
 - **SAML / SCIM** for enterprise tenants.
-- **Collaborative whiteboard** in peer interviews for system design rounds.
+- **Kubernetes manifests** (Helm chart) for multi-node installs.
+- **Problem import/export** (share problem sets between organizations).

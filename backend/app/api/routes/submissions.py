@@ -5,13 +5,17 @@ from sqlalchemy import select
 
 from app.api.deps import DB, ROLE_RANK, CurrentUser, get_scoped
 from app.api.routes.problems import get_visible_problem
-from app.db.models import Role, Submission
+from app.db.models import ProblemReveal, Role, Submission
 from app.schemas import HintIn, RunIn, RunOut, StaffSubmissionOut, SubmissionOut, TextOut
 from app.services.integrity import similarity_flag, telemetry_flags
 from app.services import quota
 from app.services.llm import LLMError, LLMProvider, get_llm
 from app.services.achievements import check_badges
+from app.services.contests import locked_by_contest, running_contest_for
 from app.services.practice import record_attempt
+import time
+
+from app.core.observability import SANDBOX_LATENCY, SANDBOX_RUNS
 from app.services import functions
 from app.services.sandbox import Sandbox, SandboxError, get_sandbox, grade
 
@@ -35,10 +39,19 @@ async def _execute(sandbox: Sandbox, language: str, code: str, inputs: list[str]
     if sig is not None:
         code, extra = functions.prepare(sig, language, code)
         args = sig.types
+    started = time.perf_counter()
     try:
         return await sandbox.execute(language, code, inputs, extra, args)
     except SandboxError as e:
+        SANDBOX_RUNS.labels(language, "unavailable", "function" if sig else "stdio").inc()
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
+    finally:
+        SANDBOX_LATENCY.labels(language).observe(time.perf_counter() - started)
+
+
+def _count(language: str, result: dict, sig) -> dict:
+    SANDBOX_RUNS.labels(language, result["verdict"], "function" if sig else "stdio").inc()
+    return result
 
 
 @router.post("/problems/{problem_id}/run", response_model=RunOut)
@@ -54,7 +67,7 @@ async def run_code(problem_id: str, body: RunIn, user: CurrentUser, db: DB, sand
         inputs, expected, hidden = [t.input for t in samples], [t.expected_output for t in samples], [False] * len(samples)
     sig = signature_of(problem)
     raw = await _execute(sandbox, body.language, body.code, inputs, sig)
-    return grade(raw, expected, hidden, inputs, sig)
+    return _count(body.language, grade(raw, expected, hidden, inputs, sig), sig)
 
 
 @router.post("/problems/{problem_id}/submit", response_model=SubmissionOut, status_code=201)
@@ -66,14 +79,20 @@ async def submit_code(problem_id: str, body: RunIn, user: CurrentUser, db: DB, s
     inputs = [t.input for t in tests]
     sig = signature_of(problem)
     raw = await _execute(sandbox, body.language, body.code, inputs, sig)
-    result = grade(raw, [t.expected_output for t in tests], [t.is_hidden for t in tests], inputs, sig)
+    result = _count(body.language, grade(raw, [t.expected_output for t in tests], [t.is_hidden for t in tests], inputs, sig), sig)
     telemetry = body.telemetry.model_dump() if body.telemetry else None
+    contest = await running_contest_for(db, user, problem.id)  # counts for a running contest automatically
     sub = Submission(
         tenant_id=user.tenant_id, user_id=user.id, problem_id=problem.id, language=body.language, code=body.code,
         verdict=result["verdict"], passed=result["passed"], total=result["total"],
         runtime_ms=result["runtime_ms"], results=result["results"], telemetry=telemetry,
+        contest_id=contest.id if contest else None,
     )
     flags = telemetry_flags(body.code, telemetry, sub.verdict, problem.difficulty)
+    if sub.verdict == "accepted" and await db.scalar(select(ProblemReveal.id).where(
+            ProblemReveal.user_id == user.id, ProblemReveal.problem_id == problem.id)):
+        flags.append({"type": "revealed_first", "severity": "low",
+                      "detail": "Opened the discussions/editorial before solving it"})
     if similar := await similarity_flag(db, sub):
         flags.append(similar)
     severity = {"high": 0, "medium": 1, "low": 2}
@@ -122,6 +141,8 @@ async def review_submission(submission_id: str, user: CurrentUser, db: DB, llm: 
     sub = await _get_submission(db, submission_id, user)
     if sub.ai_review:
         return sub
+    if await locked_by_contest(db, user, sub.problem_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "AI reviews are off for contest problems until the contest ends")
     problem = await get_visible_problem(db, sub.problem_id, user)
     await quota.consume(db, user, "llm")
     try:
@@ -136,6 +157,8 @@ async def review_submission(submission_id: str, user: CurrentUser, db: DB, llm: 
 async def get_hint(problem_id: str, body: HintIn, user: CurrentUser, db: DB, llm: LLMDep):
     """Progressive hints: level 1 nudge -> level 3 pseudocode. Never a full solution."""
     problem = await get_visible_problem(db, problem_id, user)
+    if await locked_by_contest(db, user, problem_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Hints are off for contest problems until the contest ends")
     await quota.consume(db, user, "llm")
     await db.commit()
     try:

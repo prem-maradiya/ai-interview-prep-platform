@@ -33,7 +33,8 @@ async def test_assignment_email_respects_preferences(client, reg):
     prefs = (await client.get("/api/notifications/email-preferences", headers=bob["h"])).json()
     assert prefs["email"] == "cand1@acme.io" and prefs["delivery_enabled"]
     assert {o["kind"]: o["enabled"] for o in prefs["options"]} == {
-        "assignment": True, "due_soon": True, "comment": True, "badge": False, "digest": True, "peer": True}
+        "assignment": True, "due_soon": True, "comment": True, "badge": False, "digest": True, "peer": True, "contest": True,
+        "discussion": True}
     r = await client.put("/api/notifications/email-preferences", headers=bob["h"], json={"assignment": False})
     assert {o["kind"]: o["enabled"] for o in r.json()["options"]}["assignment"] is False
 

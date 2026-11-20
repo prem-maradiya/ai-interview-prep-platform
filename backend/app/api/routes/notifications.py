@@ -55,6 +55,8 @@ class EmailPrefsIn(BaseModel):
     badge: bool | None = None
     digest: bool | None = None
     peer: bool | None = None
+    contest: bool | None = None
+    discussion: bool | None = None
 
 
 def _prefs_out(user: User) -> dict:

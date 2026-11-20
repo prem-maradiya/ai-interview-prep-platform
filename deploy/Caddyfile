@@ -1,0 +1,28 @@
+# HTTPS for PrepForge. Caddy gets and renews the certificate for {$DOMAIN} automatically.
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Metrics are for Prometheus inside the private network, never the internet.
+	respond /api/metrics 404
+
+	# API, server-sent events and WebSockets go straight to the backend. Caddy replaces any
+	# X-Forwarded-For sent by the client with the real address, so rate limits can't be dodged.
+	handle /api/* {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else is the single-page app.
+	handle {
+		reverse_proxy frontend:80
+	}
+}
