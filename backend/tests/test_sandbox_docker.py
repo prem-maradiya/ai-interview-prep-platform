@@ -51,7 +51,8 @@ BUSY_LOOP = {  # CPU-bound forever: must hit the CPU-time limit
 def sandbox():
     sb = DockerSandbox()
     sb.ensure_images()
-    return sb
+    yield sb
+    sb.close()
 
 
 @pytest.mark.parametrize("lang", list(REVERSE))
@@ -109,3 +110,71 @@ async def test_fork_bomb_is_contained(sandbox):
     code = "import os\nwhile True:\n    try: os.fork()\n    except OSError: pass"
     raw = await sandbox.execute("python", code, [""])
     assert raw[0].status in ("timeout", "runtime_error", "memory")  # contained by pids + CPU limits
+
+
+# ---------- warm pool ----------
+FRESH_CHECK = (
+    "import os\n"
+    "print('reused' if os.path.exists('/tmp/marker') else 'fresh')\n"
+    "open('/tmp/marker', 'w').write('x')\n"
+)
+
+
+def _wait_for_idle(sb, lang, timeout=20.0):
+    import time
+
+    end = time.monotonic() + timeout
+    while sb.pool.idle_count(lang) < 1 and time.monotonic() < end:
+        time.sleep(0.1)
+    assert sb.pool.idle_count(lang) >= 1
+
+
+async def test_warm_pool_serves_runs_and_never_reuses_a_container():
+    sb = DockerSandbox(warm_pool=1)
+    try:
+        sb.warm_up(["python"])
+        outputs = []
+        for _ in range(3):
+            _wait_for_idle(sb, "python")
+            raw = await sb.execute("python", FRESH_CHECK, [""])
+            outputs.append(raw[0].stdout.strip())
+        assert outputs == ["fresh"] * 3  # files written by one run are never seen by the next
+        assert sb.pool.hits == 3 and sb.pool.misses == 0
+    finally:
+        sb.close()
+
+
+async def test_warm_pool_keeps_limits_and_falls_back_when_container_died():
+    sb = DockerSandbox(warm_pool=1)
+    try:
+        sb.warm_up(["python"])
+        raw = await sb.execute("python", BUSY_LOOP["python"], [""])
+        assert raw[0].status == "timeout"  # CPU limit still enforced in a warm container
+        _wait_for_idle(sb, "python")
+        # Kill the idle container behind the pool's back: the run must still succeed (cold start).
+        with sb.pool._lock:
+            sb.pool._idle["python"][0][0].remove(force=True)
+        raw = await sb.execute("python", REVERSE["python"], ["abc"])
+        assert raw[0].status == "ok" and raw[0].stdout.strip() == "cba"
+    finally:
+        sb.close()
+
+
+async def test_closing_the_pool_removes_idle_containers():
+    sb = DockerSandbox(warm_pool=2)
+    sb.warm_up(["python"])
+    ids = [c.id for c, _, _ in sb.pool._idle["python"]]
+    assert len(ids) == 2
+    sb.close()
+    running = {c.id for c in docker.from_env().containers.list(filters={"label": "prepforge.sandbox=warm"})}
+    assert not running.intersection(ids)
+
+
+async def test_close_also_removes_containers_that_were_still_starting():
+    sb = DockerSandbox(warm_pool=1)
+    sb.warm_up(["python"])
+    await sb.execute("python", REVERSE["python"], ["abc"])  # triggers a background refill
+    sb.close()  # right away, while the replacement may still be starting
+    assert sb.pool.idle_count("python") == 0
+    mine = docker.from_env().containers.list(filters={"label": ["prepforge.sandbox=warm", f"prepforge.owner={sb.pool.owner}"]})
+    assert mine == []

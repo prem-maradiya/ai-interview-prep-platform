@@ -34,6 +34,10 @@ def run_migrations_offline() -> None:
 
 
 def _run_sync(connection) -> None:
+    if connection.dialect.name == "postgresql":
+        # Migrations may touch every tenant's rows; row-level security (0008) would hide them otherwise.
+        connection.exec_driver_sql("SELECT set_config('app.rls_system', 'on', false)")  # session-wide
+        connection.commit()  # end the implicit transaction so Alembic's own transaction is the outer one
     _configure(connection=connection)
     with context.begin_transaction():
         context.run_migrations()

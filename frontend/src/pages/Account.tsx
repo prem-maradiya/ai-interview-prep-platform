@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { SocialButton, startSocial, useProviders } from "../components/SocialButtons";
+import EmailPreferences from "../components/EmailPreferences";
 
 type Identities = {
   has_password: boolean;
@@ -108,6 +109,8 @@ export default function Account() {
           onChange={(e) => setPw({ ...pw, new_password: e.target.value })} />
         <div><button className="primary" disabled={pw.new_password.length < 8} onClick={savePassword}>Save password</button></div>
       </div>
+
+      <EmailPreferences />
     </div>
   );
 }

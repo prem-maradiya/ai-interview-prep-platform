@@ -172,3 +172,6 @@ button.social:hover:not(:disabled) { border-color: var(--accent); }
   .topbar { flex-wrap: wrap; gap: .6rem; padding: .7rem 16px; }
   main { padding: 1rem 16px; }
 }
+
+.toggle-row { cursor: pointer; }
+.toggle-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }

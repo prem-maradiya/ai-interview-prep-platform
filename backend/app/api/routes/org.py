@@ -8,6 +8,7 @@ from app.api.deps import DB, AdminUser, CurrentUser, get_scoped
 from app.api.routes.auth import revoke_all_for_user
 from app.db.models import Invite, Role, User
 from app.schemas import InviteIn, InviteOut, MemberOut, MemberUpdateIn, TenantOut
+from app.services.email import app_url, queue_email, render
 from app.services.quota import usage_summary
 
 router = APIRouter(prefix="/org", tags=["organization"])
@@ -51,6 +52,17 @@ async def create_invite(body: InviteIn, user: AdminUser, db: DB):
         expires_at=datetime.now(timezone.utc) + timedelta(days=body.days_valid),
     )
     db.add(invite)
+    if invite.email:
+        org = user.tenant
+        queue_email(db, render(
+            to=invite.email, subject=f"{user.full_name} invited you to {org.name} on PrepForge",
+            heading=f"Join {org.name} on PrepForge",
+            paragraphs=[f"{user.full_name} invited you to join {org.name} as a {invite.role}.",
+                        "PrepForge is where your team practices coding problems and mock interviews together.",
+                        f"Your invite code is {invite.code} - it expires in {body.days_valid} days."],
+            button=("Accept invite", app_url(f"/?invite={invite.code}")),
+            footer="If you weren't expecting this, you can ignore this email.",
+        ))
     await db.commit()
     return invite
 

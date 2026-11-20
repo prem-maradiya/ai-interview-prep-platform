@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     app_name: str = "PrepForge"
     environment: str = "development"  # "production" enables strict startup checks
     database_url: str = "postgresql+asyncpg://prep:prep@localhost:5432/prep"
+    # Non-superuser role that transactions switch to, so PostgreSQL row-level security applies even
+    # when DATABASE_URL connects as a superuser (as the docker-compose database does). Created by
+    # migration 0008. Empty = connect as a non-superuser role yourself.
+    db_app_role: str = "prepforge_app"
     # Redis backs the sandbox job queue and shared rate limits. Unset = in-process fallbacks (dev/tests).
     redis_url: str | None = None
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
@@ -49,10 +53,31 @@ class Settings(BaseSettings):
     sandbox_runtime: str | None = None  # e.g. "runsc" for gVisor
     sandbox_max_concurrency: int = 4
     sandbox_prebuild_images: bool = True  # worker builds missing images at startup
+    # Idle, pre-started containers kept ready per language, so a run skips container start-up
+    # (~0.5-1 s). Each is used for exactly one run, then destroyed. 0 disables. An idle
+    # container uses ~1-10 MB of RAM.
+    sandbox_warm_pool: int = 1
+
+    # Email: "console" logs messages (default, nothing to set up), "smtp" sends them, "none" disables.
+    # docker-compose points SMTP at Mailpit, a local inbox you can open at http://localhost:8025.
+    email_backend: str = "console"
+    email_from: str = "PrepForge <no-reply@prepforge.local>"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_security: str = "starttls"  # starttls | ssl | none
+    smtp_timeout_s: float = 15.0
+    # Background job in the API that sends "due within 24 hours" reminders and weekly digests.
+    # Safe with several API replicas: every email is claimed in the database before it is sent.
+    email_jobs_enabled: bool = True
+    email_jobs_interval_s: int = 600
+    password_reset_minutes: int = 30
 
     seed_demo_data: bool = True
 
     # Rate limits: (max requests, window seconds) per client IP (+ account where relevant)
+    rl_password_reset: tuple[int, int] = (5, 900)
     rl_login: tuple[int, int] = (10, 300)
     rl_register: tuple[int, int] = (5, 3600)
     rl_invite_accept: tuple[int, int] = (20, 3600)
@@ -68,6 +93,8 @@ class Settings(BaseSettings):
             problems.append("SANDBOX_BACKEND must be 'queue' so the API never needs the Docker socket")
         if not self.redis_url:
             problems.append("REDIS_URL is required")
+        if self.email_backend == "smtp" and not self.smtp_host:
+            problems.append("SMTP_HOST is required when EMAIL_BACKEND=smtp")
         if problems:
             raise RuntimeError("Refusing to start in production: " + "; ".join(problems))
 

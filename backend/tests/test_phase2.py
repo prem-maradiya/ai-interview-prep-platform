@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import delete, update
 
 from app.db.models import ReviewItem
-from app.db.session import SessionLocal
+from app.db.session import system_session
 from app.services.delivery import delivery_metrics
 from app.services.documents import ExtractionError, extract_text
 from app.services.practice import schedule, streak_from_dates
@@ -198,7 +198,7 @@ async def test_study_plan(client, reg):
     assert first["title"] not in ("Two Sum", "Reverse a String")
 
     # Problems solved before review tracking existed (no ReviewItem) are not offered as "new".
-    async with SessionLocal() as s:
+    async with system_session() as s:
         await s.execute(delete(ReviewItem).where(ReviewItem.problem_id == rev))
         await s.commit()
     titles = [p["title"] for p in (await client.get("/api/practice/plan", headers=h)).json()["new_problems"]]
@@ -207,7 +207,7 @@ async def test_study_plan(client, reg):
                       "code": "import sys\nprint(sys.stdin.read().strip()[::-1])"}, headers=h)
 
     # Time passes: make the reviews due.
-    async with SessionLocal() as s:
+    async with system_session() as s:
         await s.execute(update(ReviewItem).values(due_at=datetime.now(timezone.utc) - timedelta(days=2)))
         await s.commit()
     plan = (await client.get("/api/practice/plan", headers=h)).json()

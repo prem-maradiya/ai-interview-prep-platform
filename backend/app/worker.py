@@ -10,18 +10,13 @@ import anyio
 from arq.connections import RedisSettings
 
 from app.core.config import get_settings
+from app.core.logs import setup_logging
 from app.services.sandbox import DockerSandbox, enabled_languages
 
 settings = get_settings()
 log = logging.getLogger("prepforge.worker")
 
-# arq only configures its own logger; give ours a handler so image builds are visible in `docker compose logs`.
-_root = logging.getLogger("prepforge")
-if not _root.handlers:
-    _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter("%(asctime)s: %(message)s", "%H:%M:%S"))
-    _root.addHandler(_handler)
-    _root.setLevel(logging.INFO)
+setup_logging()  # arq only configures its own logger; show ours in `docker compose logs`
 
 
 async def run_code(ctx: dict, language: str, code: str, inputs: list[str]) -> list[dict]:
@@ -37,12 +32,21 @@ async def startup(ctx: dict) -> None:
         for tag in await anyio.to_thread.run_sync(sandbox.ensure_images):
             log.info("sandbox image ready: %s", tag)
     log.info("languages enabled: %s", ", ".join(enabled_languages()))
+    if sandbox.pool:
+        await anyio.to_thread.run_sync(sandbox.warm_up)
+        log.info("warm pool ready: %d idle container(s) per language", sandbox.pool.size)
     ctx["sandbox"] = sandbox
+
+
+async def shutdown(ctx: dict) -> None:
+    if "sandbox" in ctx:
+        await anyio.to_thread.run_sync(ctx["sandbox"].close)
 
 
 class WorkerSettings:
     functions = [run_code]
     on_startup = startup
+    on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url or "redis://localhost:6379")
     max_jobs = settings.sandbox_max_concurrency
     # Compile + up to ~50 tests at the per-test wall limit; the container has its own hard cap too.

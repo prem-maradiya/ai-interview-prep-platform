@@ -9,11 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_token
 from app.db.models import Role, User
-from app.db.session import get_db
+from app.db.session import get_db, get_system_db, set_tenant
 
 bearer = HTTPBearer(auto_error=False)
 
 DB = Annotated[AsyncSession, Depends(get_db)]
+# Cross-tenant session for public endpoints that must find accounts by org slug, token or invite.
+SystemDB = Annotated[AsyncSession, Depends(get_system_db)]
 
 T = TypeVar("T")
 
@@ -28,6 +30,7 @@ async def get_current_user(
         payload = decode_token(creds.credentials, "access")
     except jwt.PyJWTError:
         raise unauthorized
+    await set_tenant(db, payload.get("tid") or "")  # from here on, row-level security scopes every query
     user = await db.get(User, payload["sub"])
     # The tenant in the token must still match the user's tenant, and the account must be active.
     if user is None or not user.is_active or user.tenant_id != payload.get("tid"):

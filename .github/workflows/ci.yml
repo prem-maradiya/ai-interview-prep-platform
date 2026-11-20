@@ -35,8 +35,14 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Build sandbox images for all 5 languages (the Docker sandbox tests run for real on the runner)
         run: python -m app.services.sandbox
-      - name: Tests
+      - name: Tests (SQLite)
         run: python -m pytest -q
+      - name: Tests on PostgreSQL with row-level security enforced
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://prep:prep@localhost:5432/prep_test
+        run: |
+          PGPASSWORD=prep psql -h localhost -U prep -d prep -c "CREATE DATABASE prep_test"
+          python -m pytest -q --ignore=tests/test_sandbox_docker.py
       - name: Migrations apply cleanly on PostgreSQL and match the models
         env:
           DATABASE_URL: postgresql+asyncpg://prep:prep@localhost:5432/prep

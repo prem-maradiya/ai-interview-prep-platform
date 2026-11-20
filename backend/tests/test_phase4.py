@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db.models import Problem
-from app.db.session import SessionLocal
+from app.db.session import system_session
 from app.seed import seed_global_problems
 from app.services.achievements import level_for
 from tests.test_phase3 import REVERSE_OK, finish_interview, setup_org
@@ -142,16 +142,16 @@ async def test_company_filter_and_new_language_starters(client, reg):
 
 async def test_seed_upgrade_backfills_existing_databases(client, reg):
     """An install seeded by an older version gets new problems, lists and starter code on startup."""
-    async with SessionLocal() as db:
+    async with system_session() as db:
         p = await db.scalar(select(Problem).where(Problem.title == "Two Sum"))
         p.starter_code = {"python": "print()"}
         p.companies = []
         await db.delete(await db.scalar(select(Problem).where(Problem.title == "Edit Distance")))
         await db.commit()
-    async with SessionLocal() as db:
+    async with system_session() as db:
         await seed_global_problems(db)
         await seed_global_problems(db)  # idempotent
-    async with SessionLocal() as db:
+    async with system_session() as db:
         p = await db.scalar(select(Problem).where(Problem.title == "Two Sum"))
         assert p.starter_code["python"] == "print()"  # existing code kept
         assert {"java", "cpp", "go"} <= set(p.starter_code) and p.companies

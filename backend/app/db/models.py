@@ -54,6 +54,9 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default=Role.candidate)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Email opt-ins by kind (see app.services.email.EMAIL_KINDS); a missing key means the default.
+    email_prefs: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     tenant: Mapped[Tenant] = relationship(lazy="joined")

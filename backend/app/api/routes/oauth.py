@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import DB, CurrentUser, SystemDB
 from app.api.routes.auth import _aware, _now, issue_tokens
 from app.core.config import get_settings
 from app.core.security import _encode, decode_token, hash_password, verify_password
@@ -115,7 +115,7 @@ async def oauth_start(
 
 # ---------- callback ----------
 @router.get("/oauth/{provider}/callback")
-async def oauth_callback(provider: str, request: Request, db: DB, providers: Providers,
+async def oauth_callback(provider: str, request: Request, db: SystemDB, providers: Providers,
                          code: str = "", state: str = "", error: str = ""):
     p = _provider(providers, provider)
     if error:

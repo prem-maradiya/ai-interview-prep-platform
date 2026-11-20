@@ -14,6 +14,16 @@ x-backend-env: &backend-env
   MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
   GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
   GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+  # Email goes to Mailpit, a local inbox at http://localhost:8025 (nothing leaves your machine).
+  # For real delivery set EMAIL_BACKEND=smtp and SMTP_* to your provider in .env.
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+  EMAIL_FROM: ${EMAIL_FROM:-PrepForge <no-reply@prepforge.local>}
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SMTP_SECURITY: ${SMTP_SECURITY:-none}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SANDBOX_WARM_POOL: ${SANDBOX_WARM_POOL:-1}
 
 services:
   db:
@@ -55,6 +65,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     restart: unless-stopped
     mem_limit: 512m
 
@@ -76,6 +88,16 @@ services:
     # Sandbox containers have their own per-language limits; this caps the worker process itself.
     # On first start it builds the sandbox images (one-time, a few minutes) - see SANDBOX_LANGUAGES.
     mem_limit: 384m
+
+  mailpit:
+    # Local test inbox: every email the app sends shows up at http://localhost:8025.
+    image: axllent/mailpit:v1.21
+    ports:
+      - "${MAIL_UI_PORT:-8025}:8025"
+    environment:
+      MP_MAX_MESSAGES: 500
+    restart: unless-stopped
+    mem_limit: 64m
 
   frontend:
     build: ./frontend

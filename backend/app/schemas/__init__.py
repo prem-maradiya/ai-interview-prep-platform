@@ -37,6 +37,16 @@ class RefreshIn(BaseModel):
     refresh_token: str
 
 
+class PasswordResetRequestIn(BaseModel):
+    org_slug: str = Field(max_length=60)
+    email: EmailStr
+
+
+class PasswordResetConfirmIn(BaseModel):
+    token: str
+    password: str = Field(min_length=8, max_length=128)
+
+
 class TokenOut(BaseModel):
     access_token: str
     refresh_token: str

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.api.deps import DB, ROLE_RANK, CurrentUser, get_scoped
 from app.api.routes.documents import own_document
 from app.db.models import Interview, InterviewMessage, Role
-from app.db.session import SessionLocal
+from app.db.session import tenant_session
 from app.schemas import (
     InterviewIn, InterviewOut, InterviewRunIn, InterviewSummary, MessageIn, MessageOut, RunOut,
 )
@@ -131,7 +131,7 @@ async def send_message_stream(interview_id: str, body: MessageIn, user: CurrentU
     answer = _add_answer(iv, body)
     await db.commit()
     # Snapshot everything the stream needs: the request's DB session is not used after this point.
-    ctx, history, iv_id, seq = _ctx(iv), _history(iv), iv.id, answer.seq
+    ctx, history, iv_id, seq, tenant_id = _ctx(iv), _history(iv), iv.id, answer.seq, user.tenant_id
     answer_out = MessageOut.model_validate(answer).model_dump(mode="json")
 
     async def events():
@@ -144,7 +144,7 @@ async def send_message_stream(interview_id: str, body: MessageIn, user: CurrentU
         except LLMError as e:
             yield _sse("error", {"detail": str(e)})
             return
-        async with SessionLocal() as session:
+        async with tenant_session(tenant_id) as session:
             reply = InterviewMessage(interview_id=iv_id, seq=seq + 1, sender="interviewer", content="".join(parts).strip())
             session.add(reply)
             await session.commit()

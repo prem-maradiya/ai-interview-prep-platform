@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { SocialButton, startSocial, useProviders } from "../components/SocialButtons";
 
@@ -79,6 +80,11 @@ export default function AuthPage() {
           <input type="email" placeholder="Email" value={f.email} onChange={set("email")} required autoComplete="email" />
           <input type="password" placeholder="Password (8+ chars)" value={f.password} minLength={8} onChange={set("password")} required
             autoComplete={mode === "login" ? "current-password" : "new-password"} />
+          {mode === "login" && (
+            <Link className="small" to={`/forgot-password${f.org_slug ? `?org=${encodeURIComponent(f.org_slug)}` : ""}`}>
+              Forgot your password?
+            </Link>
+          )}
           {error && <div className="error">{error}</div>}
           <button className="primary" disabled={busy}>{busy ? "…" : { login: "Sign in", register: "Create organization", invite: "Join" }[mode]}</button>
         </form>

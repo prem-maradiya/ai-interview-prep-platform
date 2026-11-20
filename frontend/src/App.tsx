@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { isStaff, useAuth } from "./lib/auth";
 import AuthPage from "./pages/AuthPage";
@@ -16,12 +17,22 @@ import ProblemListPage from "./pages/ProblemLists";
 import NotificationBell from "./components/NotificationBell";
 import OAuthComplete from "./pages/OAuthComplete";
 import Account from "./pages/Account";
+import { ForgotPassword, ResetPassword, Unsubscribe } from "./pages/PublicPages";
+
+// Opened from emails; they work whether or not someone is signed in.
+const PUBLIC_PAGES: Record<string, ComponentType> = {
+  "/forgot-password": ForgotPassword,
+  "/reset-password": ResetPassword,
+  "/unsubscribe": Unsubscribe,
+};
 
 export default function App() {
   const { user, loading, signOut } = useAuth();
   const location = useLocation();
   // Social sign-in lands here signed out; it must render before the auth gate.
   if (location.pathname === "/oauth/complete" && !user) return <OAuthComplete />;
+  const PublicPage = PUBLIC_PAGES[location.pathname];
+  if (PublicPage) return <PublicPage />;
   if (loading) return <div className="center muted">Loading…</div>;
   if (!user) return <AuthPage />;
 

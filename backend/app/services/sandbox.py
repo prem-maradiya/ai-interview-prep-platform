@@ -13,13 +13,22 @@ each test. Times are reported as CPU time, so verdicts don't depend on how busy 
 Code and test *inputs* go in through an environment variable (base64 JSON), so no bind mounts are
 needed and it works when the worker runs inside Docker. Expected outputs never enter the container:
 grading happens here, on the host side.
+
+Warm pool: starting a container costs ~0.5-1 s, so a few idle containers per language are kept
+ready (SANDBOX_WARM_POOL). A run executes the harness inside one with `docker exec`; the container
+has exactly the same limits as a cold one, serves that single run, and is then destroyed - so no
+state ever carries over between submissions. Idle containers exit on their own after an hour, so
+a crashed worker can't leave them behind for long.
 """
 import asyncio
 import base64
 import hashlib
 import json
 import logging
+import socket
 import threading
+import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +41,12 @@ log = logging.getLogger("prepforge.sandbox")
 OUTPUT_LIMIT = 64 * 1024
 RESULT_MARKER = "@@RESULT@@"
 IMAGES_DIR = Path(__file__).resolve().parent.parent / "sandbox_images"
+HARNESS_CMD = ["python3", "-S", "/opt/runner/harness.py"]
+IDLE_TTL_S = 3600
+# PID 1 of an idle container: sleeps until the TTL, then exits (and the container is auto-removed).
+IDLE_CMD = ["python3", "-S", "-c", f"import time; time.sleep({IDLE_TTL_S})"]
+LABEL = "prepforge.sandbox"
+TIMED_OUT = "\x00timeout"  # sentinel output: the whole container hit its hard time cap
 
 
 @dataclass(frozen=True)
@@ -81,13 +96,147 @@ class Sandbox:
         raise NotImplementedError
 
 
+def _remove(container) -> None:
+    import docker.errors
+
+    try:
+        container.remove(force=True)
+    except docker.errors.DockerException:
+        pass  # already gone
+
+
+def _remove_later(container) -> None:
+    threading.Thread(target=_remove, args=(container,), daemon=True).start()
+
+
+class WarmPool:
+    """Pre-started idle containers per language. Thread-safe; each container is handed out once.
+
+    Idle containers are labelled with this host's name. A restarted worker removes the ones its
+    previous run left behind; anything else (another host's pool, a crash) expires within the TTL.
+    """
+
+    def __init__(self, sandbox: "DockerSandbox", size: int) -> None:
+        self.sandbox = sandbox
+        self.size = size
+        self.owner = socket.gethostname()
+        self._idle: dict[str, deque] = {}
+        self._starting: dict[str, int] = {}
+        self._threads: set[threading.Thread] = set()
+        self._lock = threading.Lock()
+        self._closed = False
+        self._swept = False
+        self.hits = 0
+        self.misses = 0
+
+    def _sweep_leftovers(self) -> None:
+        """Remove idle containers that an earlier process on this host left behind."""
+        import docker.errors
+
+        try:
+            old = self.sandbox._docker().containers.list(
+                all=True, filters={"label": [f"{LABEL}=warm", f"prepforge.owner={self.owner}"]})
+        except docker.errors.DockerException:
+            return
+        for c in old:
+            _remove(c)
+        if old:
+            log.info("removed %d leftover warm container(s)", len(old))
+
+    def take(self, language: str, tag: str):
+        """An idle container for `language`, or None (the caller then starts one cold). Refills in the background."""
+        container = None
+        with self._lock:
+            q = self._idle.setdefault(language, deque())
+            while q:
+                c, image, born = q.popleft()
+                if image == tag and time.monotonic() - born < IDLE_TTL_S - 120:
+                    container = c
+                    break
+                _remove_later(c)  # outdated image, or about to expire
+            if container is None:
+                self.misses += 1
+            else:
+                self.hits += 1
+        self._fill_in_background(language, tag)
+        return container
+
+    def _fill_in_background(self, language: str, tag: str) -> None:
+        t = threading.Thread(target=self.fill, args=(language, tag), daemon=True)
+        with self._lock:
+            if self._closed:
+                return
+            self._threads = {x for x in self._threads if x.is_alive()} | {t}
+        t.start()
+
+    def fill(self, language: str, tag: str) -> None:
+        import docker.errors
+
+        with self._lock:
+            sweep, self._swept = not self._swept, True
+        if sweep:
+            self._sweep_leftovers()
+        while True:
+            with self._lock:
+                q = self._idle.setdefault(language, deque())
+                if self._closed or len(q) + self._starting.get(language, 0) >= self.size:
+                    return
+                self._starting[language] = self._starting.get(language, 0) + 1
+            try:
+                opts = self.sandbox.container_options(language)
+                opts["labels"] = {**opts["labels"], LABEL: "warm", "prepforge.owner": self.owner}
+                c = self.sandbox._docker().containers.run(tag, IDLE_CMD, detach=True, auto_remove=True, **opts)
+            except docker.errors.DockerException as e:
+                log.warning("could not start a warm %s container: %s", language, e)
+                return
+            finally:
+                with self._lock:
+                    self._starting[language] -= 1
+            with self._lock:
+                if not self._closed:
+                    q.append((c, tag, time.monotonic()))
+                    continue
+            _remove(c)  # closed while it was starting
+            return
+
+    def idle_count(self, language: str) -> int:
+        with self._lock:
+            return len(self._idle.get(language, ()))
+
+    def close(self, timeout: float = 15.0) -> None:
+        """Remove every idle container, including ones still starting (so nothing outlives the process)."""
+        with self._lock:
+            self._closed = True
+            threads = list(self._threads)
+        end = time.monotonic() + timeout
+        for t in threads:
+            t.join(max(0.0, end - time.monotonic()))
+        with self._lock:
+            idle = [c for q in self._idle.values() for c, _, _ in q]
+            self._idle.clear()
+        for c in idle:
+            _remove(c)
+
+
 class DockerSandbox(Sandbox):
-    def __init__(self) -> None:
+    def __init__(self, warm_pool: int | None = None) -> None:
         self.settings = get_settings()
         self._sem = asyncio.Semaphore(self.settings.sandbox_max_concurrency)
         self._client = None
         self._build_lock = threading.Lock()
         self._ready: set[str] = set()
+        size = self.settings.sandbox_warm_pool if warm_pool is None else warm_pool
+        self.pool = WarmPool(self, size) if size > 0 else None
+
+    def warm_up(self, languages: list[str] | None = None) -> None:
+        """Fill the warm pool now (otherwise each language's pool fills after its first run)."""
+        if self.pool:
+            for lang in languages or enabled_languages():
+                self.pool.fill(lang, self.ensure_image(lang))
+
+    def close(self) -> None:
+        if self.pool:
+            self.pool.close()
 
     def _docker(self):
         if self._client is None:
@@ -157,40 +306,78 @@ class DockerSandbox(Sandbox):
             "container_timeout": compile_wall + n_tests * wall + 15,
         }
 
-    def _run_blocking(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
-        import docker.errors
-        import requests.exceptions
-
+    def container_options(self, language: str) -> dict:
+        """Isolation and resource limits - identical for cold and warm containers."""
         s = self.settings
         spec = LANGUAGES[language]
+        return dict(
+            network_mode="none", mem_limit=spec.memory, memswap_limit=spec.memory,
+            nano_cpus=int(s.sandbox_cpus * 1e9), pids_limit=spec.pids, read_only=True,
+            tmpfs={"/tmp": f"rw,exec,size={spec.tmpfs_mb}m,mode=1777"}, user="65534:65534", cap_drop=["ALL"],
+            security_opt=["no-new-privileges"], runtime=s.sandbox_runtime, working_dir="/tmp",
+            labels={LABEL: "run", "prepforge.language": language},
+        )
+
+    def _run_blocking(self, language: str, code: str, inputs: list[str]) -> list[RawResult]:
         tag = self.ensure_image(language)
-        limits = self._limits(spec, len(inputs))
+        limits = self._limits(LANGUAGES[language], len(inputs))
         payload = base64.b64encode(json.dumps({
             "lang": language, "code": code, "tests": inputs, "output_limit": OUTPUT_LIMIT,
             **{k: v for k, v in limits.items() if k != "container_timeout"},
         }).encode()).decode()
+        container = self.pool.take(language, tag) if self.pool else None
+        if container is not None:
+            logs = self._exec_warm(container, payload, limits["container_timeout"])
+            if logs is not None:
+                return self._parse(logs, inputs)
+            # That idle container had died (expired, Docker restarted...): fall back to a cold start.
+        return self._parse(self._run_cold(tag, language, payload, limits["container_timeout"]), inputs)
+
+    def _exec_warm(self, container, payload: str, timeout: float) -> str | None:
+        """Run the harness in a pre-started container. None if the container turned out to be unusable."""
+        import docker.errors
+
+        fired = threading.Event()
+
+        def hard_cap() -> None:  # same whole-run cap as the cold path
+            fired.set()
+            _remove(container)
+
+        timer = threading.Timer(timeout, hard_cap)
+        timer.start()
+        try:
+            result = container.exec_run(HARNESS_CMD, environment={"PAYLOAD": payload}, workdir="/tmp")
+            logs = (result.output or b"").decode(errors="replace")
+        except docker.errors.DockerException:
+            logs = None
+        finally:
+            timer.cancel()
+            _remove_later(container)  # one run per container, always
+        return TIMED_OUT if fired.is_set() else logs
+
+    def _run_cold(self, tag: str, language: str, payload: str, timeout: float) -> str:
+        import docker.errors
+        import requests.exceptions
+
         try:
             container = self._docker().containers.run(
-                tag, ["python3", "-S", "/opt/runner/harness.py"], environment={"PAYLOAD": payload}, detach=True,
-                network_mode="none", mem_limit=spec.memory, memswap_limit=spec.memory,
-                nano_cpus=int(s.sandbox_cpus * 1e9), pids_limit=spec.pids, read_only=True,
-                tmpfs={"/tmp": f"rw,exec,size={spec.tmpfs_mb}m,mode=1777"}, user="65534:65534", cap_drop=["ALL"],
-                security_opt=["no-new-privileges"], runtime=s.sandbox_runtime, working_dir="/tmp",
-            )
+                tag, HARNESS_CMD, environment={"PAYLOAD": payload}, detach=True, **self.container_options(language))
         except docker.errors.DockerException as e:
             raise SandboxError(f"Sandbox unavailable: {e}") from e
         try:
             try:
-                container.wait(timeout=limits["container_timeout"])
+                container.wait(timeout=timeout)
             except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
                 container.kill()
-                return [RawResult("timeout", "", "Overall time limit exceeded", 0) for _ in inputs]
-            logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+                return TIMED_OUT
+            return container.logs(stdout=True, stderr=True).decode(errors="replace")
         finally:
-            try:
-                container.remove(force=True)
-            except docker.errors.DockerException:
-                pass
+            _remove_later(container)
+
+    @staticmethod
+    def _parse(logs: str, inputs: list[str]) -> list[RawResult]:
+        if logs == TIMED_OUT:
+            return [RawResult("timeout", "", "Overall time limit exceeded", 0) for _ in inputs]
         idx = logs.rfind(RESULT_MARKER)
         if idx == -1:
             # The harness itself died (e.g. the whole container was OOM-killed).
@@ -293,5 +480,5 @@ if __name__ == "__main__":
     import sys
 
     logging.basicConfig(level=logging.INFO)
-    for t in DockerSandbox().ensure_images(sys.argv[1:] or None):
+    for t in DockerSandbox(warm_pool=0).ensure_images(sys.argv[1:] or None):
         print("ready:", t)
